@@ -596,13 +596,34 @@ function viewAccess(){
   return h + '</div></div>';
 }
 
-A.tab = function(t){ tab = t; try{ sessionStorage.setItem("sp.tab",t); }catch(e){} render(); };
+A.tab = function(t){ tab = t; moreOpen = false; try{ sessionStorage.setItem("sp.tab",t); }catch(e){} render(); };
+A.more = function(){ moreOpen = !moreOpen; render(); };
 A.search = function(){
   var q = document.getElementById("rq").value.trim();
   window.open(MELBA.recipes + (q ? "?search=" + encodeURIComponent(q) : ""), "_blank", "noopener");
 };
 
 /* ============ render ============ */
+
+/* ---- tab icons (24px, stroked) ---- */
+var ICO = {
+  service:  '<path d="M4 7h16M4 12h16M4 17h10"/>',
+  prep:     '<path d="M6 3v8a3 3 0 0 0 6 0V3M9 11v10"/><path d="M17 3c-1.5 2-2 4-2 6s.5 3 2 3 2-1 2-3-.5-4-2-6zM17 12v9"/>',
+  orders:   '<path d="M3 5h2l2.4 10.4A2 2 0 0 0 9.3 17h7.5a2 2 0 0 0 2-1.6L20 8H6"/><circle cx="10" cy="20" r="1.3"/><circle cx="17" cy="20" r="1.3"/>',
+  recipes:  '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5"/>',
+  clean:    '<path d="M8 3h8l1 6H7z"/><path d="M9 9v5a3 3 0 0 0 6 0V9"/><path d="M12 17v4"/>',
+  pertes:   '<path d="M4 7h16M9 7V4h6v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/>',
+  transferts:'<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
+  haccp:    '<path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  direction:'<path d="M12 3l2.6 5.6 6 .8-4.4 4.3 1.1 6-5.3-2.9L6.7 19.7l1.1-6L3.4 9.4l6-.8z"/>',
+  more:     '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'
+};
+function ico(k){
+  return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
+    + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICO[k]||'') + '</svg>';
+}
+var PRIMARY = ["service","prep","orders","recipes"];
+var moreOpen = false;
 
 function icoCheck(){ return '<svg viewBox="0 0 24 24"><polyline points="4 12 10 18 20 6"></polyline></svg>'; }
 
@@ -712,7 +733,8 @@ function viewPrep(){
     h += '<div class="card"><div class="empty">Nothing on the menu.<br><br>'
       + '<button class="btn pri" data-act="loadPrep">Load the list (' + PREP_LIST_get().length + ' lines)</button></div></div>';
   } else {
-    h += '<div class="card">' + sheetHead() + live.map(prepRow).join("") + prepForm() + '</div>';
+    h += '<div class="card">' + sheetHead()
+      + '<div class="sheetgrid">' + live.map(prepRow).join("") + '</div>' + prepForm() + '</div>';
   }
   h += '</div>';
 
@@ -721,7 +743,7 @@ function viewPrep(){
     + '<span class="sub">' + old.length + ' put aside</span></div>';
   if(showOld){
     h += old.length
-      ? '<div class="card">' + sheetHead() + old.map(prepRow).join("") + '</div>'
+      ? '<div class="card">' + sheetHead() + '<div class="sheetgrid">' + old.map(prepRow).join("") + '</div></div>'
       : '<div class="card"><div class="empty">Nothing archived.</div></div>';
   }
   h += '</div>';
@@ -893,7 +915,7 @@ function viewRecipes(){
     return h + '<div class="card" style="margin-top:10px"><div class="empty">Nothing for &ldquo;' + esc(rq) + '&rdquo;.</div></div></div>';
   }
 
-  h += '<div class="card" style="margin-top:10px">' + list.map(function(r){
+  h += '<div class="card" style="margin-top:10px"><div class="bookgrid">' + list.map(function(r){
     var id = "r" + RECIPES.indexOf(r);
     var open = openRec === id;
     var body = "";
@@ -913,7 +935,7 @@ function viewRecipes(){
       + '<span class="rchev">' + (open ? "−" : "+") + '</span></button>'
       + '<button class="x mv rmv" data-act="recArch" data-name="' + esc(r.n) + '" title="' + (S.recArch[r.n] ? 'Put back in the book' : 'Move to old menus') + '">' + (S.recArch[r.n] ? '↑' : '↓') + '</button>'
       + body + '</div>';
-  }).join("") + '</div>';
+  }).join("") + '</div></div>';
 
   return h + '</div>';
 }
@@ -1132,11 +1154,24 @@ function chrome(){
 
   if(tab === "direction" && !isMgmt(me)) tab = "service";
   if(tab === "orders" && !canOrder(me)) tab = "service";
-  h += '<nav class="tabs"><div class="tabs-in">' + TABS_get().map(function(t){
+  var visible = TABS_get();
+  h += '<nav class="tabs"><div class="tabs-in">' + visible.map(function(t){
       return '<button class="tab" role="tab" aria-selected="'+(t===tab)+'" data-act="tab" data-tab="'+t+'">'
         + esc(TAB_LABEL[t])
         + (counts[t] ? '<span class="n">'+counts[t]+'</span>' : '') + '</button>';
     }).join("") + '</div></nav>';
+
+  var primary = PRIMARY.filter(function(t){ return visible.indexOf(t) >= 0; });
+  var rest    = visible.filter(function(t){ return primary.indexOf(t) < 0; });
+  var restN   = rest.reduce(function(a,t){ return a + (counts[t]||0); }, 0);
+  h += '<nav class="botnav">' + primary.map(function(t){
+      return '<button class="tab" role="tab" aria-selected="'+(t===tab)+'" data-act="tab" data-tab="'+t+'">'
+        + ico(t) + '<span>' + esc(TAB_LABEL[t]) + '</span>'
+        + (counts[t] ? '<span class="n">'+counts[t]+'</span>' : '') + '</button>';
+    }).join("")
+    + '<button class="tab" aria-selected="'+(rest.indexOf(tab)>=0)+'" data-act="more">'
+    + ico("more") + '<span>More</span>'
+    + (restN ? '<span class="n">'+restN+'</span>' : '') + '</button></nav>';
 
   var body = tab==="service"?viewService():tab==="prep"?viewPrep():tab==="orders"?viewOrders()
     : tab==="recipes"?viewRecipes():tab==="clean"?viewClean()
@@ -1148,6 +1183,19 @@ function chrome(){
     + body + '</div></main>';
 
   if(!me) h += viewLogin();
+
+  if(moreOpen){
+    h += '<div class="mod" data-act="more"><div class="mbox" onclick="event.stopPropagation()">'
+      + '<h3>More</h3><p>The rest of the board.</p><div class="plist">'
+      + rest.map(function(t){
+          return '<button class="pbtn" data-act="tab" data-tab="' + t + '">'
+            + '<span class="av" style="background:' + (t===tab?'var(--accent)':'var(--ink3)') + '">'
+            + ico(t) + '</span>'
+            + '<span><span class="pn">' + esc(TAB_LABEL[t]) + '</span>'
+            + (counts[t] ? '<span class="ps">' + counts[t] + ' open</span>' : '') + '</span></button>';
+        }).join("")
+      + '</div></div></div>';
+  }
 
   h += shareModal();
   if(toastMsg) h += '<div class="toast">'+esc(toastMsg)+'</div>';
@@ -1175,6 +1223,7 @@ document.addEventListener("click", function(e){
   if(act==="toggle") return A.toggle(b.getAttribute("data-kind"), b.getAttribute("data-id"));
   if(act==="remove") return A.remove(b.getAttribute("data-kind"), b.getAttribute("data-id"));
   if(act==="tab")    return A.tab(b.getAttribute("data-tab"));
+  if(act==="more")   return A.more();
   if(act==="pick")   return A.pick(b.getAttribute("data-id"));
   if(act==="whoami") return A.forget();
   if(act==="addPrep")  return A.addPrep();
