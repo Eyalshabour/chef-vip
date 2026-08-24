@@ -66,7 +66,7 @@ test('data.js defines __BOOT__ itself rather than trusting the page', () => {
   const first = d.split('\n').find(l => l.trim());
   assert.match(first, /window\.__BOOT__\s*=/,
     'data.js must create __BOOT__ — nothing inline is allowed to create it for us');
-  for (const k of ['recipes', 'orderCats', 'suppliers', 'brigade']) {
+  for (const k of ['recipes', 'orderCats', 'suppliers', 'brigade', 'prepSrc']) {
     assert.match(d, new RegExp(`__BOOT__\\.${k}\\s*=`), `__BOOT__.${k} is never set`);
   }
 });

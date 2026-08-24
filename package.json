@@ -16,7 +16,8 @@
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js",
     "test:e2e": "node test/e2e.js",
-    "test:all": "npm test && npm run test:e2e && npm run test:ui",
+    "test:all": "npm test && npm run test:e2e && npm run test:ordering && npm run test:ui",
+    "test:ordering": "node test/ordering.js",
     "test:ui": "node test/ui.js"
   },
   "dependencies": {

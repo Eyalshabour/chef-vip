@@ -44,9 +44,14 @@ var PREP_EXTRA = ["Onion Foam", "Cream Oseille", "Tzatziki", "Lobster butter", "
 var _prepList = null;
 function PREP_LIST_get(){
   if(_prepList) return _prepList;
+  /* On the board the master list is inline. In the hosted build the port
+     strips it and hands it over in __BOOT__ instead — either way this is
+     the printed sheet's order, and everything else follows it. */
+  var SRC = (typeof PREP_SRC !== "undefined" && PREP_SRC)
+    || (window.__BOOT__ && window.__BOOT__.prepSrc) || {};
   var seen = {}, out = [];
   ["A","B","C","D"].forEach(function(k){
-    (PREP_SRC[k]||[]).forEach(function(t){
+    (SRC[k]||[]).forEach(function(t){
       var i = t.toLowerCase().replace(/[^a-z0-9]/g,"");
       if(!i || seen[i]) return; seen[i] = 1; out.push(t);
     });
@@ -241,17 +246,88 @@ A.remove = function(kind, id){
   save();
 };
 
+
+/* ---- where a new line belongs -------------------------------------
+ * Typing a product in should put it where the printed list has it, not
+ * at the bottom of the sheet. Anything that is not on the printed list
+ * is genuinely new, so that does go last. ------------------------- */
+function rankKey(s){ return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]/g, ""); }
+
+var _prepRank = null;
+function prepRank(){
+  if(_prepRank) return _prepRank;
+  _prepRank = {};
+  PREP_LIST_get().forEach(function(t, i){
+    var k = rankKey(t);
+    if(k && !(k in _prepRank)) _prepRank[k] = i;
+  });
+  return _prepRank;
+}
+
+var _catRank = null;
+function catRank(){
+  if(_catRank) return _catRank;
+  _catRank = {}; var i = 0;
+  Object.keys(ORDER_CATS).forEach(function(c){
+    ORDER_CATS[c].forEach(function(pn){
+      var k = rankKey(pn);
+      if(k && !(k in _catRank)) _catRank[k] = i++;
+    });
+  });
+  return _catRank;
+}
+
+/* Slide `item` in before the first line that the list puts after it.
+ * `inGroup` narrows the comparison to one supplier, so each supplier's
+ * block ends up in catalogue order without lines jumping between blocks. */
+function insertRanked(arr, item, rank, inGroup){
+  var r = rank[rankKey(item.title)];
+  if(r === undefined){ arr.push(item); return arr.length - 1; }
+  for(var i = 0; i < arr.length; i++){
+    if(inGroup && !inGroup(arr[i])) continue;
+    var ri = rank[rankKey(arr[i].title)];
+    if(ri !== undefined && ri > r){ arr.splice(i, 0, item); return i; }
+  }
+  arr.push(item);
+  return arr.length - 1;
+}
+
+/* Read out to a supplier in the order their own catalogue runs. */
+function byCatalogue(list){
+  var rank = catRank();
+  return list.map(function(o, i){ return {o: o, i: i}; }).sort(function(a, b){
+    var ra = rank[rankKey(a.o.title)], rb = rank[rankKey(b.o.title)];
+    if(ra === undefined && rb === undefined) return a.i - b.i;
+    if(ra === undefined) return 1;
+    if(rb === undefined) return -1;
+    return ra === rb ? a.i - b.i : ra - rb;
+  }).map(function(x){ return x.o; });
+}
+
 A.addPrep = function(){
-  var t = document.getElementById("prep-t"), q = document.getElementById("prep-q"), st = document.getElementById("prep-s");
-  if(!t.value.trim()) { t.focus(); return; }
-  S.prep.push({id:uid(),title:t.value.trim(),qty:q.value.trim(),station:st.value,done:false,by:null,at:null,addedBy:me?me.id:null});
-  t.value=""; q.value=""; save();
+  /* The prep form is one field. It read three, and threw on the two that
+     were never rendered — which is why nothing could be added to the sheet.
+     Read what is there; treat the rest as optional. */
+  var t = document.getElementById("prep-t");
+  if(!t || !t.value.trim()){ if(t) t.focus(); return; }
+  var q  = document.getElementById("prep-q");
+  var st = document.getElementById("prep-s");
+  insertRanked(S.prep, {
+    id:uid(), title:t.value.trim(),
+    qty: q ? q.value.trim() : "",
+    station: st ? st.value : "",
+    restr:"", adv:false, done:false, by:null, at:null,
+    addedBy: me ? me.id : null
+  }, prepRank());
+  t.value = ""; if(q) q.value = "";
+  save();
 };
 
 A.addOrder = function(){
   var t = document.getElementById("ord-t"), q = document.getElementById("ord-q"), s = document.getElementById("ord-s"), u = document.getElementById("ord-u");
   if(!t.value.trim()){ t.focus(); return; }
-  S.orders.push({id:uid(),title:t.value.trim(),qty:q.value.trim(),supplier:s.value,urgent:u.checked,done:false,by:null,at:null,addedBy:me?me.id:null});
+  var line = {id:uid(),title:t.value.trim(),qty:q.value.trim(),supplier:s.value,urgent:u.checked,done:false,by:null,at:null,addedBy:me?me.id:null};
+  insertRanked(S.orders, line, catRank(), function(o){ return o.supplier === line.supplier; });
   t.value=""; q.value=""; u.checked=false; save();
 };
 
@@ -1315,6 +1391,7 @@ function viewOrders(){
   var open = S.orders.filter(function(o){return !o.done});
   var bySup = {};
   open.forEach(function(o){ (bySup[o.supplier]=bySup[o.supplier]||[]).push(o); });
+  Object.keys(bySup).forEach(function(k){ bySup[k] = byCatalogue(bySup[k]); });
   var sups = Object.keys(bySup).sort();
   var done = S.orders.filter(function(o){return o.done});
 

@@ -242,6 +242,10 @@ fs.writeFileSync(path.join(ROOT, 'public', 'app.js'), fe);
 fs.writeFileSync(path.join(ROOT, 'public', 'styles.css'), styles);
 fs.writeFileSync(path.join(ROOT, 'public', 'data.js'),
   'window.__BOOT__ = window.__BOOT__ || { state:{}, brigade:[], recipes:[], orderCats:{}, suppliers:[] };\n' +
+  /* the master prep order: stripped out of the frontend above, handed over
+     here instead, so PREP_LIST_get and the ranked insert still know what
+     order the printed sheet runs in */
+  'window.__BOOT__.prepSrc = ' + grab(/var PREP_SRC = (\{[\s\S]*?\});\n/, 'the master prep list') + ';\n' +
   'window.__BOOT__.recipes = ' + fs.readFileSync(path.join(ROOT, 'seed', 'recipes.json'), 'utf8') + ';\n' +
   'window.__BOOT__.orderCats = ' + fs.readFileSync(path.join(ROOT, 'seed', 'orderCats.json'), 'utf8') + ';\n' +
   'window.__BOOT__.suppliers = ' + fs.readFileSync(path.join(ROOT, 'seed', 'suppliers.json'), 'utf8') + ';\n' +
