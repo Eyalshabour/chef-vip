@@ -3,14 +3,20 @@
   "version": "1.0.0",
   "private": true,
   "description": "Kitchen board for Shabour - prep sheet, orders, recipe book, cleaning, HACCP, waste and transfers.",
-  "engines": { "node": ">=20" },
+  "engines": {
+    "node": ">=20"
+  },
   "type": "commonjs",
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "migrate": "node src/migrate.js",
     "seed": "node src/seed.js",
-    "job:daily": "node src/jobs/run.js"
+    "job:daily": "node src/jobs/run.js",
+    "test": "node --test test/*.test.js",
+    "test:watch": "node --test --watch test/*.test.js",
+    "test:e2e": "node test/e2e.js",
+    "test:all": "npm test && npm run test:e2e"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

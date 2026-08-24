@@ -16,8 +16,10 @@ var MELBA = {
 var COMBO = "https://app.combohr.com/plannings/week?location=80325&team=100604&date=";
 
 /* Cuisine brigade, week 24-30 Aug 2026, from Combo */
+var BRIGADE = window.__BOOT__.brigade || [];
+PEOPLE = BRIGADE;   /* same array, so a refresh reaches both */
 
-var PEOPLE = BRIGADE;
+var PEOPLE;   /* aliased below, once BRIGADE exists */
 var MGMT = {ee:1, vb:1, ha:1};
 function isMgmt(p){ return !!(p && MGMT[p.id]); }
 function canOrder(p){
@@ -75,39 +77,50 @@ var HACCP_SEED = [
 /* ============ state ============ */
 
 var S = (window.__BOOT__ && window.__BOOT__.state) || {};
+/* The sign-in screen renders before any board has arrived, so S must be
+ * safe to read from the very first paint. */
+S.accounts = S.accounts || {};
+S.prep = S.prep || []; S.orders = S.orders || []; S.clean = S.clean || []; S.haccp = S.haccp || [];
+S.waste = S.waste || []; S.transfers = S.transfers || []; S.proteins = S.proteins || [];
+S.notes = S.notes || []; S.invoices = S.invoices || []; S.prices = S.prices || {};
+S.recArch = S.recArch || {}; if(S.priceJump == null) S.priceJump = 10;
+
 var RECIPES    = window.__BOOT__.recipes;
 var ORDER_CATS = window.__BOOT__.orderCats;
 var SUPPLIERS  = window.__BOOT__.suppliers;
-var BRIGADE    = window.__BOOT__.brigade;
 S.prep = S.prep || []; S.orders = S.orders || []; S.clean = S.clean || [];
 S.haccp = S.haccp || []; S.pinned = S.pinned || []; S.log = S.log || [];
 S.proteins = S.proteins || []; S.notes = S.notes || [];
 S.waste = S.waste || []; S.transfers = S.transfers || [];
 S.accounts = S.accounts || {};
 S.recArch = S.recArch || {};
+S.invoices = S.invoices || []; S.prices = S.prices || {};
+if(S.priceJump == null) S.priceJump = 10;
 S.rev = S.rev || 1;
 
-var TABS_ALL = ["service","prep","orders","recipes","clean","pertes","transferts","haccp","direction"];
+var TABS_ALL = ["service","prep","orders","recipes","clean","pertes","transferts","invoices","haccp","direction"];
 function TABS_get(){
   return TABS_ALL.filter(function(t){
     if(t === "direction") return isMgmt(me);
+    if(t === "invoices")  return isMgmt(me);
     if(t === "orders")    return canOrder(me);
     return true;
   });
 }
-var TAB_LABEL = {service:"Service",prep:"Prep",orders:"Orders",recipes:"Recipes",clean:"Cleaning",haccp:"HACCP",pertes:"Waste",transferts:"Transfers",direction:"Management"};
+var TAB_LABEL = {service:"Service",prep:"Prep",orders:"Orders",recipes:"Recipes",clean:"Cleaning",haccp:"HACCP",pertes:"Waste",transferts:"Transfers",invoices:"Invoices",direction:"Management"};
 var tab = "service";
 try { var t = sessionStorage.getItem("sp.tab"); if (TABS_ALL.indexOf(t)>=0) tab = t; } catch(e){}
 
 var me = null;
 try { var m = localStorage.getItem("sp.me"); if(m){ me = PEOPLE.filter(function(p){return p.id===m})[0] || null; } } catch(e){}
 
-var api = true, readOnly = false, busy = false, toastMsg = null, toastT = null;
+var readOnly = false, busy = false, toastMsg = null, toastT = null;
 
 /* direction */
 var dirOpen = false, codeErr = null;
 var rq = "", openRec = null;
 var showOld = false, recView = "menu";
+var openInv = null;
 var share = null, copied = false;
 var loginErr = null, loginMode = "code";
 try { dirOpen = sessionStorage.getItem("sp.dir") === "1"; } catch(e){}
@@ -150,6 +163,21 @@ function onToday(){
 /* ============ persistence ============ */
 
 
+
+/* ---- the only door to the server, so the token is never forgotten ---- */
+var CSRF = "";
+function api(method, path, body){
+  var o = { method: method, headers: {}, credentials: "same-origin" };
+  if(body !== undefined){ o.headers["Content-Type"] = "application/json"; o.body = JSON.stringify(body); }
+  if(CSRF && method !== "GET") o.headers["X-CSRF-Token"] = CSRF;
+  return fetch(path, o).then(function(r){
+    return r.json().catch(function(){ return null; }).then(function(j){
+      if(j && j.csrf) CSRF = j.csrf;
+      return { status: r.status, ok: r.ok, json: j };
+    });
+  });
+}
+
 var saveT = null, dirty = false;
 function save(msg){
   if(readOnly){ render(); return; }
@@ -159,21 +187,20 @@ function save(msg){
   if(msg) toast(msg);
 }
 function flush(){
-  fetch("/api/state", {method:"PUT", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({rev: S.rev, state: S})})
-    .then(function(r){
-      if(r.status === 409) return r.json().then(function(j){
-        S = j.state; dirty = false; render(); toast("Someone else saved first - reloaded"); });
-      if(r.status === 401){ me = null; dirty = false; render(); return; }
-      if(!r.ok) throw new Error(r.status);
-      return r.json().then(function(j){ S.rev = j.rev; dirty = false; render(); });
-    })["catch"](function(){ dirty = false; toast("Could not save, try again"); render(); });
+  api("PUT", "/api/state", {rev: S.rev, state: S}).then(function(r){
+    dirty = false;
+    if(r.status === 409){ S = r.json.state; render(); toast("Someone else saved first - reloaded"); return; }
+    if(r.status === 401){ me = null; render(); return; }
+    if(r.status === 403){ toast("Session expired - reload the page"); render(); return; }
+    if(!r.ok){ toast((r.json && r.json.error) || "Could not save, try again"); render(); return; }
+    S.rev = r.json.rev; render();
+  })["catch"](function(){ dirty = false; toast("Could not save, try again"); render(); });
 }
 function poll(){
   if(dirty || !me) return;
-  fetch("/api/state").then(function(r){ return r.ok ? r.json() : null; })
-    .then(function(j){ if(j && j.state && j.state.rev !== S.rev){ S = j.state; render(); } })
-    ["catch"](function(){});
+  api("GET", "/api/state").then(function(r){
+    if(r.ok && r.json && r.json.state && r.json.state.rev !== S.rev){ S = r.json.state; render(); }
+  })["catch"](function(){});
 }
 
 function toast(t){
@@ -192,7 +219,19 @@ A.pick = function(id){
   try { localStorage.setItem("sp.me", id); } catch(e){}
   render();
 };
-A.forget = function(){ fetch("/api/logout", {method:"POST"}).then(function(){ me = null; render(); }); };
+A.forget = function(){ api("POST", "/api/logout").then(function(){ me = null; CSRF = ""; render(); }); };
+
+function list(kind){ return S[kind]; }
+
+A.toggle = function(kind, id){
+  if(!me){ toast("Tell us who you are first"); return; }
+  var L = list(kind);
+  for(var i=0;i<L.length;i++){ if(L[i].id===id){
+    if(L[i].done){ L[i].done=false; L[i].by=null; L[i].at=null; }
+    else { var s=stamp(); L[i].done=true; L[i].by=s.by; L[i].at=s.at; }
+    break; } }
+  save();
+};
 
 A.remove = function(kind, id){
   S[kind] = list(kind).filter(function(x){ return x.id!==id; });
@@ -331,19 +370,20 @@ A.approve = function(id){
 /* ---- melba, read server-side with the house key ---- */
 function mcpMsg(err){ return (err && err.message) || "Melba unreachable right now."; }
 function startLive(){
-  fetch("/api/melba/summary").then(function(r){ return r.json(); })
-    .then(function(j){
-      live.me = j.me || null; live.cat = j.cat || null; live.at = j.at || null;
-      live.meErr = j.error ? {message: j.error} : null; render();
-    })["catch"](function(e){ live.meErr = e; render(); });
+  api("GET", "/api/melba/summary").then(function(r){
+    var j = r.json || {};
+    live.me = j.me || null; live.cat = j.cat || null; live.at = j.at || null;
+    live.meErr = j.error ? {message: j.error} : null; render();
+  })["catch"](function(e){ live.meErr = e; render(); });
 }
 function stopLive(){}
 A.reorder = function(){
   live.reorderBusy = true; live.reorderErr = null; render();
-  fetch("/api/melba/reorder", {method:"POST"}).then(function(r){ return r.json(); })
-    .then(function(j){ live.reorder = j.error ? null : j; live.reorderErr = j.error ? {message:j.error} : null;
-      live.reorderBusy = false; render(); })
-    ["catch"](function(e){ live.reorderErr = e; live.reorderBusy = false; render(); });
+  api("POST", "/api/melba/reorder").then(function(r){
+    var j = r.json || {};
+    live.reorder = j.error ? null : j; live.reorderErr = j.error ? {message: j.error} : null;
+    live.reorderBusy = false; render();
+  })["catch"](function(e){ live.reorderErr = e; live.reorderBusy = false; render(); });
 };
 
 A.arch = function(id){
@@ -404,6 +444,21 @@ function buildShare(kind, key){
     lines = S.transfers.map(function(x){
       return "- " + x.title + (x.qty ? "  " + x.qty : "") + (x.when ? "  " + x.when : "");
     });
+  } else if(kind === "invoice"){
+    var v = S.invoices.filter(function(x){ return x.id === key; })[0];
+    if(v){
+      title = "Prices - " + v.supplier + (v.number ? " " + v.number : "");
+      var mv = invMoves(v);
+      var moved = mv.filter(function(m){ return m.d != null && Math.abs(m.d) >= 0.5; });
+      lines = (moved.length ? moved : mv).map(function(m){
+        return "- " + m.l.product + ": " + (m.prev ? money(m.prev.price) + " -> " : "")
+          + money(m.l.price) + (m.d != null ? "  (" + pct(m.d) + ")" : "  (new)")
+          + (jumped(m.d) ? "  <<" : "");
+      });
+      if(moved.length && moved.length < mv.length){
+        lines.push(""); lines.push("(" + (mv.length - moved.length) + " unchanged)");
+      }
+    } else { title = "Prices"; }
   } else if(kind === "clean"){
     var left = S.clean.filter(function(c){ return !c.done; });
     title = "Cleaning left";
@@ -489,18 +544,15 @@ function accountFor(email){
   return null;
 }
 
-function enrolled(id){ return !!(S.accounts[id] && S.accounts[id].email && S.accounts[id].code); }
+function enrolled(id){ var a = S.accounts && S.accounts[id]; return !!(a && a.email && a.code); }
 function anyEnrolled(){ return PEOPLE.some(function(p){ return enrolled(p.id); }); }
 
 A.login = function(){
   var e = document.getElementById("lg-e"), c = document.getElementById("lg-c");
-  fetch("/api/login", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({email: e.value.trim(), code: c.value.trim()})})
-    .then(function(r){ return r.json().then(function(j){ return {ok:r.ok, j:j}; }); })
-    .then(function(res){
-      if(!res.ok){ loginErr = res.j.error || "Sign in failed."; render(); return; }
-      loginErr = null; boot();
-    })["catch"](function(){ loginErr = "Server unreachable."; render(); });
+  api("POST", "/api/login", {email: e.value.trim(), code: c.value.trim()}).then(function(r){
+    if(!r.ok){ loginErr = (r.json && r.json.error) || "Sign in failed."; render(); return; }
+    loginErr = null; boot();
+  })["catch"](function(){ loginErr = "Server unreachable."; render(); });
 };
 
 A.loginMode = function(m){ loginMode = m; loginErr = null; render(); };
@@ -508,32 +560,30 @@ A.loginMode = function(m){ loginMode = m; loginErr = null; render(); };
 /* enrolment, from the management side */
 A.setEmail = function(id, v){
   S.accounts[id] = S.accounts[id] || {email:"", code:""};
-  S.accounts[id].email = String(v||"").trim();   /* sent with the code */
+  S.accounts[id].email = String(v||"").trim();
 };
 A.setPin = function(id){
   var f = document.getElementById("ac-" + id);
-  var v = (f ? f.value : "").trim();
-  var a = S.accounts[id] || {};
+  var v = (f ? f.value : "").trim(), a = S.accounts[id] || {};
   if(!/^\d{4}$/.test(v)){ toast("Four digits"); return; }
   if(!a.email){ toast("Add the email first"); return; }
-  fetch("/api/users/" + id + "/code", {method:"POST", headers:{"Content-Type":"application/json"},
-    body: JSON.stringify({email: a.email, code: v})})
-    .then(function(r){ return r.json(); })
-    .then(function(j){ if(j.error){ toast(j.error); return; } f.value = ""; toast(nameOf(id) + " can sign in now"); boot(); })
-    ["catch"](function(){ toast("Could not save"); });
+  api("POST", "/api/users/" + id + "/code", {email: a.email, code: v}).then(function(r){
+    if(!r.ok){ toast((r.json && r.json.error) || "Could not save"); return; }
+    f.value = ""; toast(nameOf(id) + " can sign in now"); boot();
+  })["catch"](function(){ toast("Could not save"); });
 };
 A.grantOrder = function(id){
-  fetch("/api/users/" + id + "/order", {method:"POST"})
-    .then(function(r){ return r.json(); })
-    .then(function(j){ if(j.error){ toast(j.error); return; }
-      toast(j.canOrder ? nameOf(id) + " can order now" : nameOf(id) + " can no longer order"); boot(); })
-    ["catch"](function(){ toast("Could not save"); });
+  api("POST", "/api/users/" + id + "/order").then(function(r){
+    if(!r.ok){ toast((r.json && r.json.error) || "Could not save"); return; }
+    toast(r.json.canOrder ? nameOf(id) + " can order now" : nameOf(id) + " can no longer order"); boot();
+  })["catch"](function(){ toast("Could not save"); });
 };
 
 A.clearAcc = function(id){
-  fetch("/api/users/" + id + "/access", {method:"DELETE"})
-    .then(function(){ toast("Access removed"); boot(); })
-    ["catch"](function(){ toast("Could not save"); });
+  api("DELETE", "/api/users/" + id + "/access").then(function(r){
+    if(!r.ok){ toast((r.json && r.json.error) || "Could not save"); return; }
+    toast("Access removed"); boot();
+  })["catch"](function(){ toast("Could not save"); });
 };
 
 function viewLogin(){
@@ -596,6 +646,171 @@ function viewAccess(){
   return h + '</div></div>';
 }
 
+
+/* ---- invoices: what the supplier actually charged ---- */
+
+function pnorm(v){ return String(v == null ? "" : v).replace(/\s+/g," ").trim().toLowerCase(); }
+function pkey(sup, prod){ return pnorm(sup) + "::" + pnorm(prod); }
+function lastPrice(sup, prod){
+  var h = S.prices[pkey(sup, prod)];
+  return (h && h.length) ? h[h.length-1] : null;
+}
+function delta(oldP, newP){
+  if(oldP == null || !isFinite(oldP) || oldP === 0 || newP == null) return null;
+  return ((newP - oldP) / oldP) * 100;
+}
+function jumped(d){ return d != null && Math.abs(d) >= (S.priceJump || 10); }
+function money(n){ return (n == null || !isFinite(n)) ? "—" : "€" + Number(n).toFixed(2); }
+function pct(d){ return d == null ? "" : (d > 0 ? "+" : "") + d.toFixed(1) + "%"; }
+
+A.addInvoice = function(){
+  var sup = document.getElementById("iv-s"), no = document.getElementById("iv-n"), dt = document.getElementById("iv-d");
+  var st = stamp();
+  S.invoices.unshift({
+    id: uid(), supplier: sup.value, number: no.value.trim(), date: dt.value.trim() || DAY,
+    status: "draft", lines: [], by: st.by, at: st.at
+  });
+  no.value = ""; dt.value = "";
+  save("Invoice started");
+};
+A.openInv = function(id){ openInv = (openInv === id ? null : id); render(); };
+A.addLine = function(id){
+  var p = document.getElementById("il-p-" + id), q = document.getElementById("il-q-" + id), u = document.getElementById("il-u-" + id);
+  if(!p.value.trim()){ p.focus(); return; }
+  for(var i=0;i<S.invoices.length;i++){ if(S.invoices[i].id===id){
+    S.invoices[i].lines.push({id:uid(), product:p.value.trim(), qty:q.value.trim(), price:parseFloat(u.value)});
+    break; } }
+  p.value=""; q.value=""; u.value=""; save();
+};
+A.rmLine = function(id, lid){
+  for(var i=0;i<S.invoices.length;i++){ if(S.invoices[i].id===id){
+    S.invoices[i].lines = S.invoices[i].lines.filter(function(l){ return l.id!==lid; }); break; } }
+  save();
+};
+A.applyInv = function(id){
+  var v = null;
+  for(var i=0;i<S.invoices.length;i++){ if(S.invoices[i].id===id){ v = S.invoices[i]; break; } }
+  if(!v || !v.lines.length){ toast("No lines to apply"); return; }
+  var st = stamp(), n = 0;
+  v.lines.forEach(function(l){
+    if(l.price == null || !isFinite(l.price)) return;
+    var k = pkey(v.supplier, l.product);
+    S.prices[k] = S.prices[k] || [];
+    S.prices[k].push({at: st.at, price: l.price, inv: v.number || "", by: st.by, date: v.date});
+    n++;
+  });
+  v.status = "done"; v.appliedBy = st.by; v.appliedAt = st.at;
+  save(n + " price" + (n===1?"":"s") + " recorded");
+};
+A.setJump = function(v){
+  var n = parseFloat(v);
+  if(isFinite(n) && n > 0 && n < 200) S.priceJump = n;
+};
+A.rmInv = function(id){ S.invoices = S.invoices.filter(function(v){ return v.id!==id; }); save(); };
+
+function invMoves(v){
+  return v.lines.map(function(l){
+    var prev = lastPrice(v.supplier, l.product);
+    var d = prev ? delta(prev.price, l.price) : null;
+    return {l:l, prev:prev, d:d};
+  });
+}
+
+function viewInvoices(){
+  if(!isMgmt(me)){
+    return '<div class="gate"><div class="lock">⛔</div><h2>Management only</h2>'
+      + '<p>Invoices move what everything costs. Eyal, Valentin and Hajir.</p></div>';
+  }
+
+  var h = '<div class="sec"><div class="sec-h"><h2>Invoices</h2>'
+    + '<span class="sub">' + S.invoices.length + ' logged</span></div>'
+    + '<div class="ban q"><div class="bi">🧾</div><div><div class="bd">'
+    + 'Photograph the invoice and send it to me in the chat — I read it and fill the lines in here, no Melba credits spent. '
+    + 'Then check what moved and apply it. Nothing reaches Melba until you say so.'
+    + '</div></div></div>';
+
+  h += '<div class="card"><div class="add" style="border-top:0">'
+    + '<select id="iv-s">' + SUPPLIERS.map(function(x){ return '<option>' + esc(x) + '</option>'; }).join("") + '</select>'
+    + '<input id="iv-n" placeholder="Invoice no." style="flex:1 1 130px" data-enter="addInvoice">'
+    + '<input id="iv-d" placeholder="Date" style="flex:0 0 120px" data-enter="addInvoice">'
+    + '<button class="btn pri" data-act="addInvoice">Start</button></div>'
+    + '<div class="kv"><span>Flag a jump over</span>'
+    + '<span><input class="pcount" value="' + esc(String(S.priceJump)) + '" data-jump="1"> <b>%</b></span></div></div></div>';
+
+  if(!S.invoices.length){
+    return h + '<div class="card"><div class="empty">No invoices yet.</div></div>';
+  }
+
+  h += '<div class="card">' + S.invoices.map(function(v){
+    var open = openInv === v.id;
+    var moves = invMoves(v);
+    var flags = moves.filter(function(m){ return jumped(m.d); }).length;
+    var total = v.lines.reduce(function(a,l){
+      var q = parseFloat(l.qty); return a + ((isFinite(q)?q:1) * (isFinite(l.price)?l.price:0)); }, 0);
+
+    var head = '<button class="rhead' + (open?' on':'') + '" data-act="openInv" data-id="' + v.id + '">'
+      + '<span class="rname">' + esc(v.supplier)
+      + (v.number ? ' <span class="chip">' + esc(v.number) + '</span>' : '')
+      + (v.status === "done" ? ' <span class="chip ok">applied</span>' : ' <span class="chip wa">draft</span>')
+      + (flags ? ' <span class="chip cr">' + flags + ' jump' + (flags===1?'':'s') + '</span>' : '')
+      + '</span>'
+      + '<span class="rcount">' + money(total) + '</span>'
+      + '<span class="rchev">' + (open ? "−" : "+") + '</span></button>';
+
+    if(!open) return '<div class="rrow">' + head + '</div>';
+
+    var body = '<div class="rbody" style="background:var(--surface2)">'
+      + '<div class="sheet-h"><span class="sh-p" style="padding-left:0">product</span>'
+      + '<span class="sh-r">was</span><span class="sh-r">now</span><span class="sh-r">move</span></div>'
+      + (moves.length ? moves.map(function(m){
+          var cls = jumped(m.d) ? (m.d > 0 ? 'cr' : 'ok') : '';
+          return '<div class="prow">'
+            + '<span class="pname">' + esc(m.l.product)
+            + (m.l.qty ? ' <span class="chip">' + esc(m.l.qty) + '</span>' : '') + '</span>'
+            + '<span class="sh-r mono" style="color:var(--ink3)">' + (m.prev ? money(m.prev.price) : 'first') + '</span>'
+            + '<span class="sh-r mono" style="color:var(--ink);font-weight:600">' + money(m.l.price) + '</span>'
+            + '<span class="sh-r">'
+            + (m.d == null ? '<span class="chip">new</span>'
+                           : '<span class="chip ' + cls + '">' + pct(m.d) + '</span>') + '</span>'
+            + '<button class="x" data-act="rmLine" data-id="' + v.id + '" data-lid="' + m.l.id + '" aria-label="Remove">&times;</button>'
+            + '</div>';
+        }).join("") : '<div class="empty">No lines yet.</div>')
+      + '<div class="add">'
+      + '<input id="il-p-' + v.id + '" class="w" list="cat" placeholder="Product">'
+      + catalogueHTML()
+      + '<input id="il-q-' + v.id + '" placeholder="Qty" style="flex:0 0 86px">'
+      + '<input id="il-u-' + v.id + '" placeholder="Unit €" inputmode="decimal" style="flex:0 0 104px">'
+      + '<button class="btn pri" data-act="addLine" data-id="' + v.id + '">Add line</button></div>'
+      + '<div class="shrow" style="margin-top:14px">'
+      + (v.status !== "done"
+          ? '<button class="btn pri" data-act="applyInv" data-id="' + v.id + '">Apply these prices</button>'
+          : '<span class="chip ok">applied ' + esc(nameOf(v.appliedBy)) + ' · ' + hhmm(v.appliedAt) + '</span>')
+      + shareBtn("invoice", v.id, "Send what moved")
+      + '<button class="btn" data-act="rmInv" data-id="' + v.id + '">Delete</button>'
+      + '</div></div>';
+
+    return '<div class="rrow">' + head + body + '</div>';
+  }).join("") + '</div>';
+
+  var keys = Object.keys(S.prices).filter(function(k){ return S.prices[k].length > 1; });
+  if(keys.length){
+    h += '<div class="sec" style="margin-top:24px"><div class="sec-h"><h2>Price history</h2>'
+      + '<span class="sub">' + keys.length + ' moved more than once</span></div><div class="card">'
+      + keys.sort().map(function(k){
+          var hist = S.prices[k], first = hist[0].price, last = hist[hist.length-1].price;
+          var d = delta(first, last);
+          var name = k.split("::")[1] || k, sup = k.split("::")[0];
+          return '<div class="kv"><span>' + esc(name) + ' <span class="chip ac">' + esc(sup) + '</span></span>'
+            + '<b>' + money(first) + ' → ' + money(last)
+            + (d != null ? ' <span class="chip ' + (jumped(d) ? (d>0?'cr':'ok') : '') + '">' + pct(d) + '</span>' : '')
+            + '</b></div>';
+        }).join("") + '</div></div>';
+  }
+
+  return h;
+}
+
+
 A.tab = function(t){ tab = t; moreOpen = false; try{ sessionStorage.setItem("sp.tab",t); }catch(e){} render(); };
 A.more = function(){ moreOpen = !moreOpen; render(); };
 A.search = function(){
@@ -604,6 +819,7 @@ A.search = function(){
 };
 
 /* ============ render ============ */
+
 
 /* ---- tab icons (24px, stroked) ---- */
 var ICO = {
@@ -615,6 +831,7 @@ var ICO = {
   pertes:   '<path d="M4 7h16M9 7V4h6v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/>',
   transferts:'<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
   haccp:    '<path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
+  invoices: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h3"/>',
   direction:'<path d="M12 3l2.6 5.6 6 .8-4.4 4.3 1.1 6-5.3-2.9L6.7 19.7l1.1-6L3.4 9.4l6-.8z"/>',
   more:     '<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/>'
 };
@@ -1139,6 +1356,7 @@ function chrome(){
     haccp: S.haccp.filter(function(x){return !x.done}).length,
     recipes: 0,
     pertes: S.waste.length,
+    invoices: isMgmt(me) ? S.invoices.filter(function(v){return v.status!=="done"}).length : 0,
     transferts: S.transfers.length,
     direction: isMgmt(me) ? S.orders.filter(function(o){return !o.done && !o.approved}).length : 0,
     orders: canOrder(me) ? S.orders.filter(function(o){return !o.done}).length : 0,
@@ -1154,6 +1372,7 @@ function chrome(){
 
   if(tab === "direction" && !isMgmt(me)) tab = "service";
   if(tab === "orders" && !canOrder(me)) tab = "service";
+  if(tab === "invoices" && !isMgmt(me)) tab = "service";
   var visible = TABS_get();
   h += '<nav class="tabs"><div class="tabs-in">' + visible.map(function(t){
       return '<button class="tab" role="tab" aria-selected="'+(t===tab)+'" data-act="tab" data-tab="'+t+'">'
@@ -1176,6 +1395,7 @@ function chrome(){
   var body = tab==="service"?viewService():tab==="prep"?viewPrep():tab==="orders"?viewOrders()
     : tab==="recipes"?viewRecipes():tab==="clean"?viewClean()
     : tab==="pertes"?viewWaste():tab==="transferts"?viewTransfers()
+    : tab==="invoices"?viewInvoices()
     : tab==="direction"?viewDirection():viewHaccp();
 
   h += '<main><div class="wrap">'
@@ -1224,6 +1444,12 @@ document.addEventListener("click", function(e){
   if(act==="remove") return A.remove(b.getAttribute("data-kind"), b.getAttribute("data-id"));
   if(act==="tab")    return A.tab(b.getAttribute("data-tab"));
   if(act==="more")   return A.more();
+  if(act==="addInvoice") return A.addInvoice();
+  if(act==="openInv")    return A.openInv(b.getAttribute("data-id"));
+  if(act==="addLine")    return A.addLine(b.getAttribute("data-id"));
+  if(act==="rmLine")     return A.rmLine(b.getAttribute("data-id"), b.getAttribute("data-lid"));
+  if(act==="applyInv")   return A.applyInv(b.getAttribute("data-id"));
+  if(act==="rmInv")      return A.rmInv(b.getAttribute("data-id"));
   if(act==="pick")   return A.pick(b.getAttribute("data-id"));
   if(act==="whoami") return A.forget();
   if(act==="addPrep")  return A.addPrep();
@@ -1274,17 +1500,16 @@ document.addEventListener("change", function(e){
   if(t && t.dataset && t.dataset.val){ A.setVal(t.dataset.val, t.value); save(); }
   if(t && t.dataset && t.dataset.restr){ A.setRestr(t.dataset.restr, t.value); save(); }
   if(t && t.dataset && t.dataset.prot){ A.setProt(t.dataset.prot, t.value); save(); }
-  if(t && t.dataset && t.dataset.mail){ A.setEmail(t.dataset.mail, t.value); }
+  if(t && t.dataset && t.dataset.mail){ A.setEmail(t.dataset.mail, t.value); save(); }
+  if(t && t.dataset && t.dataset.jump){ A.setJump(t.value); save(); }
 });
 
 /* ============ boot ============ */
 
 function boot(){
-  fetch("/api/state").then(function(r){
-    if(r.status === 401){ me = null; render(); return null; }
-    return r.json();
-  }).then(function(j){
-    if(!j) return;
+  api("GET", "/api/state").then(function(r){
+    if(r.status === 401){ me = null; render(); return; }
+    var j = r.json; if(!j) return;
     S = j.state; me = j.user; readOnly = !!j.readOnly;
     if(j.brigade && j.brigade.length){ BRIGADE.length = 0; j.brigade.forEach(function(p){ BRIGADE.push(p); }); }
     mcp = true; mcpTried = true;

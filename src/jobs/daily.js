@@ -94,4 +94,4 @@ function start() {
   console.log('[job] scheduled - morning', m, '| evening', e, '|', TZ);
 }
 
-module.exports = { start, morning, evening };
+module.exports = { start, morning, evening, writeBoard, readBoard };

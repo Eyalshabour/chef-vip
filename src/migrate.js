@@ -13,8 +13,13 @@ CREATE TABLE IF NOT EXISTS users (
   can_order  boolean NOT NULL DEFAULT false,
   always_on  boolean NOT NULL DEFAULT false,
   shifts     jsonb   NOT NULL DEFAULT '{}'::jsonb,
+  fail_count   int NOT NULL DEFAULT 0,
+  locked_until timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS fail_count int NOT NULL DEFAULT 0;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS locked_until timestamptz;
 
 CREATE TABLE IF NOT EXISTS board (
   id         int PRIMARY KEY DEFAULT 1,

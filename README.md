@@ -20,6 +20,57 @@ and `shabour __ recipe_.pdf`.
 Sign-in is email + a four-digit code. Codes are bcrypt-hashed in the database —
 unlike the previous single-page version, they are not readable from the page source.
 
+## Security
+
+| | |
+|---|---|
+| Codes | bcrypt, cost 12. Never in the page, never in a response, never in a log. |
+| Wrong codes | 8 strikes locks the account for 15 minutes. A correct code will not open a locked account. |
+| Unknown email | Answers identically to a wrong code, and takes the same time — an attacker cannot learn who has an account. |
+| Login flooding | Ten tries per email per ten minutes, sixty per address. Keyed per email so one person mistyping does not throttle the brigade, who share one connection. |
+| Sessions | httpOnly, SameSite=Lax, Secure in production, regenerated on sign-in so a planted session id is useless. |
+| CSRF | Double-submit token, required on every write, compared in constant time. |
+| Headers | CSP with no inline script, nosniff, DENY framing, no referrer leak, HSTS in production, no `X-Powered-By`. |
+| The board | Size- and shape-checked before storage. Permissions live in the `users` table — anything a client posts under `accounts` is dropped. |
+| Melba | The key stays on the server. Only management can reach it, rate limited, and price writes are line by line with an explicit id. |
+| Audit | Every sign-in, failure, grant and revocation is recorded with who did it. |
+
+What this is *not*: the four-digit codes are convenience credentials for a
+kitchen, not passwords. Eight guesses out of ten thousand combinations is
+slow going, but they are short by design. Do not reuse them anywhere else.
+
+## Testing
+
+```bash
+npm test          # 59 unit and integration tests
+npm run test:e2e  # the real interface against a live server
+npm run test:all  # both
+```
+
+Both need a Postgres to talk to:
+
+```bash
+createdb chefvip_test
+TEST_DATABASE_URL=postgres://localhost/chefvip_test npm run test:all
+```
+
+The end-to-end suite runs `public/app.js` unmodified against a stub DOM and a
+real HTTP server. That is deliberate: it is the only layer that catches a
+forgotten CSRF header, a renamed field, or a sign-in screen that crashes
+before any data arrives — three bugs it found on its first run.
+
+## Changing the interface
+
+The interface is authored in the board (the single-page version) and ported here:
+
+```bash
+node tools/port-frontend.js ../kitchen/content.html
+```
+
+The port refuses to write a frontend with fewer actions than the board has,
+because that is exactly how the two silently drifted apart once — eight
+actions short, including the one that ticks things off.
+
 ## Running it locally
 
 ```bash
@@ -62,10 +113,19 @@ node -e "require('bcryptjs').hash('1234',12).then(console.log)"
 `src/melba.js` reads Melba with one house key, server-side, so the chef and sous
 see the figures without needing their own connector.
 
-**`MELBA_API_BASE` is unverified.** Melba's MCP endpoint is `https://mcp.melba.io/mcp`;
-the REST base was not something we could confirm. Check it against Melba's own
-documentation before trusting any number this returns. Until it is set, the
-Management panel says Melba is not configured and everything else works normally.
+The **routes** are confirmed — they are the ones Melba's own MCP tools document:
+`GET /me`, `POST /supplying-items/search`, `PATCH /supplying-items/{id}`,
+`POST /orders`, `POST /invoices/analyze`. What is **not** confirmed is the REST
+base host: Melba's MCP endpoint is `https://mcp.melba.io/mcp`, and the REST base
+could not be verified from the build environment. Set `MELBA_API_BASE` from
+Melba's own documentation before trusting any number this returns. Until it is
+set, the Management panel says Melba is not configured and everything else works.
+
+Prices live on **supplying items** — one row per supplier per product, carrying
+`amount`. There are 1246 of them in the Shabour account. `POST /api/melba/prices`
+matches an invoice's lines against them so "was" is Melba's own number;
+`POST /api/melba/apply-prices` writes the new ones back, one line at a time,
+each named explicitly.
 
 Worth knowing: stock automation is currently **off** in the Shabour Melba account,
 for both ingredients and recipes. Until it is on, the reorder calculation will always
