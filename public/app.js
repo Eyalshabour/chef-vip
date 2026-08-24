@@ -20,6 +20,12 @@ var COMBO = "https://app.combohr.com/plannings/week?location=80325&team=100604&d
 var PEOPLE = BRIGADE;
 var MGMT = {ee:1, vb:1, ha:1};
 function isMgmt(p){ return !!(p && MGMT[p.id]); }
+function canOrder(p){
+  if(!p) return false;
+  if(MGMT[p.id]) return true;
+  var a = S.accounts && S.accounts[p.id];
+  return !!(a && a.order);
+}
 
 var SHIFT_COLOR = {
   "Prep Day":"#8B6FC4","Prep Night":"#C4736F","Dinner":"#5C7FC4",
@@ -83,7 +89,11 @@ S.rev = S.rev || 1;
 
 var TABS_ALL = ["service","prep","orders","recipes","clean","pertes","transferts","haccp","direction"];
 function TABS_get(){
-  return TABS_ALL.filter(function(t){ return t !== "direction" || isMgmt(me); });
+  return TABS_ALL.filter(function(t){
+    if(t === "direction") return isMgmt(me);
+    if(t === "orders")    return canOrder(me);
+    return true;
+  });
 }
 var TAB_LABEL = {service:"Service",prep:"Prep",orders:"Orders",recipes:"Recipes",clean:"Cleaning",haccp:"HACCP",pertes:"Waste",transferts:"Transfers",direction:"Management"};
 var tab = "service";
@@ -157,8 +167,7 @@ function flush(){
       if(r.status === 401){ me = null; dirty = false; render(); return; }
       if(!r.ok) throw new Error(r.status);
       return r.json().then(function(j){ S.rev = j.rev; dirty = false; render(); });
-    })
-    ["catch"](function(){ dirty = false; toast("Could not save, try again"); render(); });
+    })["catch"](function(){ dirty = false; toast("Could not save, try again"); render(); });
 }
 function poll(){
   if(dirty || !me) return;
@@ -332,7 +341,8 @@ function stopLive(){}
 A.reorder = function(){
   live.reorderBusy = true; live.reorderErr = null; render();
   fetch("/api/melba/reorder", {method:"POST"}).then(function(r){ return r.json(); })
-    .then(function(j){ live.reorder = j; live.reorderBusy = false; render(); })
+    .then(function(j){ live.reorder = j.error ? null : j; live.reorderErr = j.error ? {message:j.error} : null;
+      live.reorderBusy = false; render(); })
     ["catch"](function(e){ live.reorderErr = e; live.reorderBusy = false; render(); });
 };
 
@@ -498,21 +508,32 @@ A.loginMode = function(m){ loginMode = m; loginErr = null; render(); };
 /* enrolment, from the management side */
 A.setEmail = function(id, v){
   S.accounts[id] = S.accounts[id] || {email:"", code:""};
-  S.accounts[id].email = String(v||"").trim();
+  S.accounts[id].email = String(v||"").trim();   /* sent with the code */
 };
 A.setPin = function(id){
   var f = document.getElementById("ac-" + id);
   var v = (f ? f.value : "").trim();
+  var a = S.accounts[id] || {};
   if(!/^\d{4}$/.test(v)){ toast("Four digits"); return; }
-  S.accounts[id] = S.accounts[id] || {email:"", code:""};
-  if(!S.accounts[id].email){ toast("Add the email first"); return; }
-  S.accounts[id].code = h4(v);
-  f.value = "";
-  save(nameOf(id) + " can sign in now");
+  if(!a.email){ toast("Add the email first"); return; }
+  fetch("/api/users/" + id + "/code", {method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({email: a.email, code: v})})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(j.error){ toast(j.error); return; } f.value = ""; toast(nameOf(id) + " can sign in now"); boot(); })
+    ["catch"](function(){ toast("Could not save"); });
 };
+A.grantOrder = function(id){
+  fetch("/api/users/" + id + "/order", {method:"POST"})
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(j.error){ toast(j.error); return; }
+      toast(j.canOrder ? nameOf(id) + " can order now" : nameOf(id) + " can no longer order"); boot(); })
+    ["catch"](function(){ toast("Could not save"); });
+};
+
 A.clearAcc = function(id){
-  delete S.accounts[id];
-  save("Access removed");
+  fetch("/api/users/" + id + "/access", {method:"DELETE"})
+    .then(function(){ toast("Access removed"); boot(); })
+    ["catch"](function(){ toast("Could not save"); });
 };
 
 function viewLogin(){
@@ -552,7 +573,7 @@ function viewAccess(){
     + '<div class="ban q"><div class="bi">🔑</div><div><div class="bd">'
     + 'Give someone an email and a four-digit code and they sign in with it. Be clear-eyed about what this is: '
     + 'a name tag with a lock, not a password. The codes live in the page, so anyone who can read its source can read them. '
-    + 'What actually keeps strangers out is who you share the board with.'
+    + 'What actually keeps strangers out is who you share the board with. The Orders button hands someone the order list \u2014 management always has it.'
     + '</div></div></div><div class="card">';
 
   h += PEOPLE.map(function(p){
@@ -566,6 +587,8 @@ function viewAccess(){
       + '<input class="acmail" type="email" value="' + esc(a.email || "") + '" placeholder="email" data-mail="' + p.id + '">'
       + '<input id="ac-' + p.id + '" class="acpin" inputmode="numeric" maxlength="4" placeholder="••••">'
       + '<button class="btn sm" data-act="setPin" data-id="' + p.id + '">' + (ok ? 'New code' : 'Set') + '</button>'
+      + '<button class="btn sm' + (canOrder(p) ? ' pri' : '') + '" data-act="grantOrder" data-id="' + p.id + '"'
+      + (MGMT[p.id] ? ' disabled title="Management always can"' : '') + '>Orders</button>'
       + (ok ? '<button class="x" data-act="clearAcc" data-id="' + p.id + '" aria-label="Remove access">&times;</button>' : '')
       + '</div>';
   }).join("");
@@ -794,6 +817,10 @@ function catalogueHTML(){
 }
 
 function viewOrders(){
+  if(!canOrder(me)){
+    return '<div class="gate"><div class="lock">\u26d4</div><h2>Not your list</h2>'
+      + '<p>Ordering is for management and whoever they hand it to. Ask Eyal, Valentin or Hajir.</p></div>';
+  }
   var open = S.orders.filter(function(o){return !o.done});
   var bySup = {};
   open.forEach(function(o){ (bySup[o.supplier]=bySup[o.supplier]||[]).push(o); });
@@ -1085,6 +1112,7 @@ function chrome(){
     pertes: S.waste.length,
     transferts: S.transfers.length,
     direction: isMgmt(me) ? S.orders.filter(function(o){return !o.done && !o.approved}).length : 0,
+    orders: canOrder(me) ? S.orders.filter(function(o){return !o.done}).length : 0,
     service: 0
   };
   var h = '<header class="top"><div class="top-in">'
@@ -1096,6 +1124,7 @@ function chrome(){
     + '</div></header>';
 
   if(tab === "direction" && !isMgmt(me)) tab = "service";
+  if(tab === "orders" && !canOrder(me)) tab = "service";
   h += '<nav class="tabs"><div class="tabs-in">' + TABS_get().map(function(t){
       return '<button class="tab" role="tab" aria-selected="'+(t===tab)+'" data-act="tab" data-tab="'+t+'">'
         + esc(TAB_LABEL[t])
@@ -1158,6 +1187,7 @@ document.addEventListener("click", function(e){
   if(act==="loginMode")return A.loginMode(b.getAttribute("data-m"));
   if(act==="setPin")   return A.setPin(b.getAttribute("data-id"));
   if(act==="clearAcc") return A.clearAcc(b.getAttribute("data-id"));
+  if(act==="grantOrder") return A.grantOrder(b.getAttribute("data-id"));
   if(act==="loadPrep") return A.loadPrep();
   if(act==="adv")      return A.adv(b.getAttribute("data-id"));
   if(act==="addProt")  return A.addProt();
@@ -1188,7 +1218,7 @@ document.addEventListener("change", function(e){
   if(t && t.dataset && t.dataset.val){ A.setVal(t.dataset.val, t.value); save(); }
   if(t && t.dataset && t.dataset.restr){ A.setRestr(t.dataset.restr, t.value); save(); }
   if(t && t.dataset && t.dataset.prot){ A.setProt(t.dataset.prot, t.value); save(); }
-  if(t && t.dataset && t.dataset.mail){ A.setEmail(t.dataset.mail, t.value); save(); }
+  if(t && t.dataset && t.dataset.mail){ A.setEmail(t.dataset.mail, t.value); }
 });
 
 /* ============ boot ============ */
@@ -1199,7 +1229,9 @@ function boot(){
     return r.json();
   }).then(function(j){
     if(!j) return;
-    S = j.state; me = j.user; readOnly = !!j.readOnly; mcp = true; mcpTried = true;
+    S = j.state; me = j.user; readOnly = !!j.readOnly;
+    if(j.brigade && j.brigade.length){ BRIGADE.length = 0; j.brigade.forEach(function(p){ BRIGADE.push(p); }); }
+    mcp = true; mcpTried = true;
     render();
     if(isMgmt(me)) startLive();
   })["catch"](function(){ render(); });

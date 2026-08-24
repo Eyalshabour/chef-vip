@@ -7,10 +7,15 @@ if (!process.env.DATABASE_URL) {
   process.exit(1);
 }
 
+const url = process.env.DATABASE_URL;
+const isLocal = /sslmode=disable/.test(url) || /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(url);
+
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false },
+  connectionString: url,
+  ssl: isLocal ? false : { rejectUnauthorized: false },
   max: 10,
 });
+
+pool.on('error', err => console.error('[db] idle client error', err.message));
 
 module.exports = { pool, q: (t, p) => pool.query(t, p) };
