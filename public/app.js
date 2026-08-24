@@ -31,8 +31,10 @@ function canOrder(p){
 
 var SHIFT_COLOR = {
   /* each carries white initials, so each clears 4.5:1 against white */
-  "Prep Day":"#8263BF","Prep Night":"#B85752","Dinner":"#4D73BF",
-  "Coupure":"#8D7133","Lunch":"#5E7E43","Leave":"#6C7772","Direction":"#AD621E"
+  /* drawn from the room: brass, plum-iron, the blue tile, rust, olive, steel.
+     Each carries white initials, so each clears 4.5:1 against white. */
+  "Prep Day":"#7A5B1B","Prep Night":"#5D4260","Dinner":"#275D86",
+  "Coupure":"#8E4425","Lunch":"#4F6136","Leave":"#545A5F","Direction":"#2C3438"
 };
 
 var ON_MENU = ["Artichoke","Garlic Gribiche","Pickled Onion","Fish Tartare","Chopped Parsley","Urfa Oil","Caper Leaves","Onion Foam","Langoustine","Cream Oseille","Tzatziki","YellowTail","Lobster butter","Pomelo","Szabzi","Szabzi Tuille","Confit Leeks","Leek Juice","Sabayon Tomer","Fish Stock","Rouget","Leek Velouté / ND","Duck","Orange Gel","Celery Gel","Crumble Tanzia","Duck Jus","Pate","Mantu","Hamoud","Hamoud VEG","pickles coliflowers","Carrot Caviar","FENNEL CONFIT","Topi Confit","Veg Stock","Harif Oil","GF Bread","Brunoise Apple","Brunoise Mango (+green)","Brunoise Rhubarbe","cheese trat /gf/ND","Filo Cones / GF","Cherry BR","LOBSTER TARTAR","Fish Tartar","Razor Clams","Tarama / VEG","BR Mushrooms","Fig Gel","Ayran / ND","Cucumber Salad","Mahleb foam","sake cream","lemon cream","peas","peas jus","moule","toro tuna","mohamara","Gel Carrot Coriandre","Smokey Carrot","Bisque","Bisque Vege","Brocoli","Brunoise Chili","Brunoise Celeri","Cod","Cream Herbs","Cream Herbs ND","Fried chickpeas","Girolle","Muscade Vinaigar","Eggplant VG","Thina foam","B.egg","Relish","Bottarga","Meluhia powder","Sweetbread","Mustard leaves cream","Honey/Mustard Cream","Tempura","Zucchini flours","Zucchini Chiffonade","Veal Jus","Croutons"];
@@ -613,7 +615,7 @@ function viewLogin(){
       + '<p>Pick your name to get started. Ask ' + esc(nameOf("vb")) + ' or Eyal to set you up with an email and a code.</p>'
       + '<div class="plist">' + un.map(function(p){
           var sh = p.shifts[DAY];
-          var col = sh ? (SHIFT_COLOR[sh[0]]||"#6C7772") : "#6C7772";
+          var col = sh ? (SHIFT_COLOR[sh[0]]||"#545A5F") : "#545A5F";
           return '<button class="pbtn" data-act="pick" data-id="' + p.id + '">'
             + '<span class="av" style="background:' + col + '">' + esc(p.ini) + '</span>'
             + '<span><span class="pn">' + esc(p.name)
@@ -1161,7 +1163,7 @@ function viewService(){
     + '<span class="act">' + extLink(COMBO+WEEK, "Combo", "sm") + '</span></div>'
     + '<div class="brig">' + team.map(function(x){
         var s = x.s, off = !x.p.always && (!s || s[0]==="Leave");
-        var col = x.p.always ? SHIFT_COLOR["Direction"] : (s ? (SHIFT_COLOR[s[0]]||"#6C7772") : "#6C7772");
+        var col = x.p.always ? SHIFT_COLOR["Direction"] : (s ? (SHIFT_COLOR[s[0]]||"#545A5F") : "#545A5F");
         return '<div class="person'+(off?" off":"")+'">'
           + '<span class="stripe" style="background:'+col+'"></span>'
           + '<span class="av" style="background:'+col+'">'+esc(x.p.ini)+'</span>'
@@ -1230,8 +1232,9 @@ function viewPrep(){
 }
 
 function sheetHead(){
-  return '<div class="sheet-h"><span class="sh-p">product</span>'
+  var one = '<div class="sheet-h"><span class="sh-p">product</span>'
     + '<span class="sh-r">restriction</span><span class="sh-a">ADV</span></div>';
+  return '<div class="sheet-hd">' + one + one + '</div>';   /* second shows only two-up */
 }
 
 function prepRow(it){
@@ -1621,7 +1624,7 @@ function chrome(){
   };
   var h = '<header class="top"><div class="top-in">'
     + '<span class="brand">CHEF <em>VIP</em></span>'
-    + '<span class="datechip">Kitchen<b>'+esc(prettyDate(DAY))+'</b></span>'
+    + '<span class="datechip">Shabour<b>'+esc(prettyDate(DAY))+'</b></span>'
     + (me
         ? '<button class="me" data-act="whoami"><span class="av">'+esc(me.ini)+'</span><span>'+esc(me.name.split(" ")[0])+'</span></button>'
         : '<button class="btn pri" data-act="whoami">Sign in</button>')
