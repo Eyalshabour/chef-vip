@@ -125,6 +125,24 @@ a page. The board (the single-page version) has no upload button at all, because
 a published page cannot hold a file; the control is drawn only when the app is
 hosted.
 
+## What the board works out for itself
+
+**Cheaper elsewhere.** Once two suppliers have invoiced the same product, the
+board says which is cheaper and by how much — on the invoice line as you check
+it, and as a list of everything the kitchen is not buying at its best price.
+This is the number nobody has time to work out by hand and it is usually the
+one worth acting on.
+
+**Bought before.** Starting an invoice for a supplier offers what they have
+sold before, at their last price, one tap each. Less typing, and it keeps the
+price history from splitting on a spelling.
+
+**Spelling, not guessing.** `  CARROT ` becomes `Carrot`, because that is the
+same product typed differently. `carot` is left exactly as typed, because it is
+near both `Carrot` and `Small carotte` and picking one silently would put the
+wrong product on an invoice. Near matches are offered under the form as *did you
+mean*, for a person to choose.
+
 ## Melba
 
 `src/melba.js` reads Melba with one house key, server-side, so the chef and sous

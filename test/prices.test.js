@@ -105,3 +105,52 @@ test('melba matching returns nothing rather than a bad guess', () => {
   a.equal(p.matchMelba({ product: 'langoustine' }, items, byId), null);
   a.equal(p.matchMelba({ product: '' }, items, byId), null);
 });
+
+test('the cheapest supplier for a product is found across the history', () => {
+  const h = {
+    'vergers — veg::carrot': [{ price: 1.80 }],
+    'primeur mondial::carrot': [{ price: 1.44 }],
+    'vergers — veg::lemon': [{ price: 3.40 }],
+  };
+  const all = p.acrossSuppliers('Carrot', h);
+  a.equal(all.length, 2);
+  a.equal(all[0].supplier, 'primeur mondial', 'cheapest first');
+  a.equal(all[0].price, 1.44);
+});
+
+test('only the latest price from each supplier counts', () => {
+  const h = { 's1::carrot': [{ price: 1.0 }, { price: 3.0 }], 's2::carrot': [{ price: 2.0 }] };
+  a.equal(p.acrossSuppliers('carrot', h)[0].supplier, 's2', 's1 is now dearer than it was');
+});
+
+test('overpaying names the gap, and ignores a product with one supplier', () => {
+  const h = {
+    'vergers — veg::carrot': [{ price: 1.80 }],
+    'primeur mondial::carrot': [{ price: 1.44 }],
+    'vergers — veg::lemon': [{ price: 3.40 }],
+  };
+  const o = p.overpaying(h);
+  a.equal(o.length, 1, 'lemon has nothing to compare against');
+  a.equal(o[0].product, 'carrot');
+  a.equal(o[0].gap.toFixed(0), '20');
+});
+
+test('a difference too small to act on is not reported', () => {
+  const h = { 'a::x': [{ price: 1.00 }], 'b::x': [{ price: 0.98 }] };
+  a.equal(p.overpaying(h).length, 0);
+});
+
+test('canonical fixes how a name was typed', () => {
+  const known = ['Carrot', 'Big onion', 'Comté'];
+  a.equal(p.canonical('  CARROT ', known), 'Carrot');
+  a.equal(p.canonical('big  onion', known), 'Big onion');
+  a.equal(p.canonical('Carrot', known), null, 'already right, nothing to do');
+});
+
+test('canonical never guesses which product was meant', () => {
+  const known = ['Carrot', 'Small carotte', 'Big onion'];
+  a.equal(p.canonical('carot', known), null,
+    'close to two different products — changing it silently would be worse than leaving it');
+  a.equal(p.canonical('onion', known), null, 'a fragment is not a product');
+  a.equal(p.canonical('langoustine', known), null);
+});

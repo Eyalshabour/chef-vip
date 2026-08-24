@@ -692,9 +692,25 @@ A.addInvoice = function(){
   save("Invoice started");
 };
 A.openInv = function(id){ openInv = (openInv === id ? null : id); render(); };
+A.useName = function(id, name){
+  var p = document.getElementById("il-p-" + id);
+  if(p){ p.value = name; p.focus(); }
+  render();
+};
+
+A.quickLine = function(id, name, price){
+  for(var i=0;i<S.invoices.length;i++){ if(S.invoices[i].id===id){
+    S.invoices[i].lines.push({id:uid(), product:name, qty:"", price:parseFloat(price)});
+    break; } }
+  save();
+};
+
 A.addLine = function(id){
   var p = document.getElementById("il-p-" + id), q = document.getElementById("il-q-" + id), u = document.getElementById("il-u-" + id);
   if(!p.value.trim()){ p.focus(); return; }
+  /* Only fix how a known name was typed. Never change which product it is. */
+  var fixed = canonical(p.value);
+  if(fixed) p.value = fixed;
   for(var i=0;i<S.invoices.length;i++){ if(S.invoices[i].id===id){
     S.invoices[i].lines.push({id:uid(), product:p.value.trim(), qty:q.value.trim(), price:parseFloat(u.value)});
     break; } }
@@ -782,6 +798,105 @@ function fileChip(v){
     + esc(v.file.filename || "invoice") + '</a>';
 }
 
+
+/* ---- what the board can work out on its own ---- */
+
+/* Every supplier's latest price for one product, cheapest first. */
+function acrossSuppliers(product){
+  var want = pnorm(product), out = [];
+  Object.keys(S.prices).forEach(function(k){
+    var parts = k.split("::");
+    if(parts[1] !== want) return;
+    var hist = S.prices[k];
+    if(!hist || !hist.length) return;
+    out.push({supplier: parts[0], price: hist[hist.length-1].price, seen: hist[hist.length-1].at});
+  });
+  return out.sort(function(a,b){ return a.price - b.price; });
+}
+
+/* Is someone else cheaper for this, by enough to be worth saying? */
+function cheaperElsewhere(supplier, product, price){
+  var all = acrossSuppliers(product);
+  if(all.length < 2) return null;
+  var best = all[0];
+  if(pnorm(best.supplier) === pnorm(supplier)) return null;
+  if(!isFinite(price) || price <= 0) return null;
+  var save = ((price - best.price) / price) * 100;
+  if(save < 5) return null;
+  return {supplier: best.supplier, price: best.price, save: save};
+}
+
+/* Products the kitchen is not buying from whoever sells them cheapest. */
+function overpaying(){
+  var seen = {}, out = [];
+  Object.keys(S.prices).forEach(function(k){
+    var product = k.split("::")[1];
+    if(!product || seen[product]) return;
+    seen[product] = 1;
+    var all = acrossSuppliers(product);
+    if(all.length < 2) return;
+    var worst = all[all.length-1], best = all[0];
+    var gap = ((worst.price - best.price) / worst.price) * 100;
+    if(gap < 5) return;
+    out.push({product: product, best: best, worst: worst, gap: gap});
+  });
+  return out.sort(function(a,b){ return b.gap - a.gap; });
+}
+
+/* The names this supplier has invoiced before — one tap instead of typing,
+ * and it keeps the price history from splitting on a spelling. */
+function boughtBefore(supplier){
+  var sup = pnorm(supplier), out = [], pool = knownProducts();
+  Object.keys(S.prices).forEach(function(k){
+    var parts = k.split("::");
+    if(parts[0] !== sup) return;
+    var hist = S.prices[k];
+    /* the key is normalised; show the name the way the kitchen writes it */
+    out.push({name: pool[parts[1]] || parts[1], price: hist[hist.length-1].price});
+  });
+  return out.sort(function(a,b){ return a.name < b.name ? -1 : 1; }).slice(0, 24);
+}
+
+/* Only ever fix HOW a known product was typed - case, spacing, a stray
+ * accent. Never guess at WHICH product was meant: "carot" is not close
+ * enough to "Carrot" to rewrite silently, and it is close enough to
+ * "Small carotte" to be rewritten into the wrong thing entirely. A wrong
+ * product on an invoice is a wrong price on a wrong item.
+ * Anything less than certain is offered as a suggestion, not applied. */
+function knownProducts(){
+  var pool = {};
+  Object.keys(ORDER_CATS).forEach(function(c){
+    ORDER_CATS[c].forEach(function(p){ pool[pnorm(p)] = p; });
+  });
+  Object.keys(S.prices).forEach(function(k){
+    var n = k.split("::")[1];
+    if(n && !pool[n]) pool[n] = n;
+  });
+  return pool;
+}
+
+/* Same product, typed differently. Safe to apply. */
+function canonical(text){
+  var pool = knownProducts(), q = pnorm(text);
+  if(!q) return null;
+  if(pool[q] && pool[q] !== text) return pool[q];
+  var loose = q.replace(/[^a-z0-9]/g, "");
+  var hit = Object.keys(pool).filter(function(k){
+    return k.replace(/[^a-z0-9]/g, "") === loose;
+  })[0];
+  return (hit && pool[hit] !== text) ? pool[hit] : null;
+}
+
+/* Did you mean? Offered, never applied. */
+function nearestProducts(text){
+  var pool = knownProducts(), q = pnorm(text);
+  if(q.length < 3) return [];
+  var keys = Object.keys(pool);
+  var starts = keys.filter(function(k){ return k.indexOf(q) === 0; });
+  var holds  = keys.filter(function(k){ return starts.indexOf(k) < 0 && k.indexOf(q) >= 0; });
+  return starts.concat(holds).slice(0, 4).map(function(k){ return pool[k]; });
+}
+
 function viewInvoices(){
   if(!isMgmt(me)){
     return '<div class="gate"><div class="lock">⛔</div><h2>Management only</h2>'
@@ -806,7 +921,7 @@ function viewInvoices(){
   h += '<div class="card"><div class="add" style="border-top:0">'
     + '<select id="iv-s">' + SUPPLIERS.map(function(x){ return '<option>' + esc(x) + '</option>'; }).join("") + '</select>'
     + '<input id="iv-n" placeholder="Invoice no." style="flex:1 1 130px" data-enter="addInvoice">'
-    + '<input id="iv-d" placeholder="Date" style="flex:0 0 120px" data-enter="addInvoice">'
+    + '<input id="iv-d" placeholder="Date" value="' + esc(DAY) + '" style="flex:0 0 130px" data-enter="addInvoice">'
     + '<button class="btn pri" data-act="addInvoice">Start</button></div>'
     + uploadRow(null)
     + '<div class="kv"><span>Flag a jump over</span>'
@@ -847,7 +962,12 @@ function viewInvoices(){
             + '<span class="sh-r mono" style="color:var(--ink);font-weight:600">' + money(m.l.price) + '</span>'
             + '<span class="sh-r">'
             + (m.d == null ? '<span class="chip">new</span>'
-                           : '<span class="chip ' + cls + '">' + pct(m.d) + '</span>') + '</span>'
+                           : '<span class="chip ' + cls + '">' + pct(m.d) + '</span>')
+            + (function(){
+                var ch = cheaperElsewhere(v.supplier, m.l.product, m.l.price);
+                return ch ? ' <span class="chip wa" style="text-transform:none">'
+                  + esc(ch.supplier) + ' ' + money(ch.price) + '</span>' : '';
+              })() + '</span>'
             + '<button class="x" data-act="rmLine" data-id="' + v.id + '" data-lid="' + m.l.id + '" aria-label="Remove">&times;</button>'
             + '</div>';
         }).join("") : '<div class="empty">No lines yet.</div>')
@@ -857,6 +977,28 @@ function viewInvoices(){
       + '<input id="il-q-' + v.id + '" placeholder="Qty" style="flex:0 0 86px">'
       + '<input id="il-u-' + v.id + '" placeholder="Unit €" inputmode="decimal" style="flex:0 0 104px">'
       + '<button class="btn pri" data-act="addLine" data-id="' + v.id + '">Add line</button></div>'
+      + (function(){
+          var typed = (typeof document !== "undefined" && document.getElementById("il-p-" + v.id));
+          var near = typed ? nearestProducts(typed.value || "") : [];
+          if(!near.length) return '';
+          return '<div class="add" style="gap:6px;padding-top:0"><span class="chip">did you mean</span>'
+            + near.map(function(n){
+                return '<button class="btn sm" data-act="useName" data-id="' + v.id + '" data-p="' + esc(n) + '">' + esc(n) + '</button>';
+              }).join("") + '</div>';
+        })()
+      + (function(){
+          var prev = boughtBefore(v.supplier);
+          if(!prev.length) return '';
+          var have = {}; v.lines.forEach(function(l){ have[pnorm(l.product)] = 1; });
+          var left = prev.filter(function(p){ return !have[pnorm(p.name)]; });
+          if(!left.length) return '';
+          return '<div class="add" style="gap:6px"><span class="chip">bought before</span>'
+            + left.map(function(p){
+                return '<button class="btn sm" data-act="quickLine" data-id="' + v.id + '"'
+                  + ' data-p="' + esc(p.name) + '" data-u="' + p.price + '">'
+                  + esc(p.name) + ' <span style="opacity:.6">' + money(p.price) + '</span></button>';
+              }).join("") + '</div>';
+        })()
       + uploadRow(v.id)
       + '<div class="shrow" style="margin-top:14px">'
       + (v.status !== "done"
@@ -868,6 +1010,21 @@ function viewInvoices(){
 
     return '<div class="rrow">' + head + body + '</div>';
   }).join("") + '</div>';
+
+  var over = overpaying();
+  if(over.length){
+    h += '<div class="sec" style="margin-top:24px"><div class="sec-h"><h2>Cheaper elsewhere</h2>'
+      + '<span class="sub">same product, two suppliers</span></div><div class="card">'
+      + over.map(function(o){
+          return '<div class="kv"><span>' + esc(o.product) + '</span><b>'
+            + '<span class="chip ok" style="text-transform:none">' + esc(o.best.supplier) + ' ' + money(o.best.price) + '</span> '
+            + '<span class="chip cr" style="text-transform:none">' + esc(o.worst.supplier) + ' ' + money(o.worst.price) + '</span> '
+            + '<span class="chip">' + o.gap.toFixed(0) + '% apart</span></b></div>';
+        }).join("")
+      + '<div class="note">Latest price from each supplier who has invoiced this product. '
+      + 'Worth a look before the next order — though a pack size or a quality difference '
+      + 'can explain a gap the board cannot see.</div></div></div>';
+  }
 
   var keys = Object.keys(S.prices).filter(function(k){ return S.prices[k].length > 1; });
   if(keys.length){
@@ -1557,6 +1714,8 @@ document.addEventListener("click", function(e){
   if(act==="applyInv")   return A.applyInv(b.getAttribute("data-id"));
   if(act==="rmInv")      return A.rmInv(b.getAttribute("data-id"));
   if(act==="pickFile")   return A.pickFile(b.getAttribute("data-id"));
+  if(act==="quickLine")  return A.quickLine(b.getAttribute("data-id"), b.getAttribute("data-p"), b.getAttribute("data-u"));
+  if(act==="useName")    return A.useName(b.getAttribute("data-id"), b.getAttribute("data-p"));
   if(act==="pick")   return A.pick(b.getAttribute("data-id"));
   if(act==="whoami") return A.forget();
   if(act==="addPrep")  return A.addPrep();
