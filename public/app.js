@@ -646,15 +646,22 @@ function statHTML(label, val, items){
 function viewService(){
   var team = onToday();
   var on = team.filter(function(x){ return x.p.always || (x.s && x.s[0]!=="Leave"); });
+  var cooksOn = team.filter(function(x){ return !x.p.always && x.s && x.s[0]!=="Leave"; });
   var h = "";
 
   if(!HAS_ROTA){
     h += '<div class="ban q"><div class="bi">📅</div><div><div class="bt">Rota out of date</div>'
       + '<div class="bd">This board carries the week of 24–30 August 2026. Open Combo for the current week, then ask me to refresh it.</div>'
       + '<div style="margin-top:8px"><a class="btn sm" href="'+COMBO+WEEK+'" target="_blank" rel="noopener">Open Combo →</a></div></div></div>';
-  } else if(!on.length){
-    h += '<div class="ban"><div class="bi">🌙</div><div><div class="bt">Kitchen closed today</div>'
-      + '<div class="bd">Weekly rest for the whole brigade. Next service: Tuesday 25 August.</div></div></div>';
+  } else if(!cooksOn.length){
+    var pw = DAY.split("-"), wd = new Date(+pw[0], +pw[1]-1, +pw[2]).getDay();
+    h += '<div class="ban"><div class="bi">🌙</div><div>'
+      + '<div class="bt">' + (wd === 0 ? 'Closed Sunday' : 'Nobody on the rota today') + '</div>'
+      + '<div class="bd">'
+      + (wd === 0
+          ? 'The one day the kitchen shuts.'
+          : 'Combo has the whole brigade resting today \u2014 an exception, not the usual week. The kitchen normally runs Monday to Saturday and closes Sundays only.')
+      + '</div></div></div>';
   }
 
   if(S.serviceDate !== DAY){

@@ -74,7 +74,7 @@ to compare against a threshold.
 
 ## The daily jobs
 
-Two cron jobs, Europe/Paris, Tuesday to Saturday (the kitchen is closed Sunday and Monday):
+Two cron jobs, Europe/Paris, **Monday to Saturday** — the kitchen closes Sundays:
 
 - **08:17** — opens the service, resets cleaning and HACCP, keeps unfinished prep,
   pulls the Melba figures and the reorder preview onto the Management panel.

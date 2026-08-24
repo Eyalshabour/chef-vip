@@ -87,8 +87,8 @@ async function evening() {
 }
 
 function start() {
-  const m = process.env.JOB_MORNING || '17 8 * * 2-6';
-  const e = process.env.JOB_EVENING || '41 15 * * 2-6';
+  const m = process.env.JOB_MORNING || '17 8 * * 1-6';
+  const e = process.env.JOB_EVENING || '41 15 * * 1-6';
   cron.schedule(m, () => morning().catch(err => console.error('[job] morning', err)), { timezone: TZ });
   cron.schedule(e, () => evening().catch(err => console.error('[job] evening', err)), { timezone: TZ });
   console.log('[job] scheduled - morning', m, '| evening', e, '|', TZ);
