@@ -30,8 +30,9 @@ function canOrder(p){
 }
 
 var SHIFT_COLOR = {
-  "Prep Day":"#8B6FC4","Prep Night":"#C4736F","Dinner":"#5C7FC4",
-  "Coupure":"#C4A45C","Lunch":"#7FA85C","Leave":"#7E8A84","Direction":"#B4661F"
+  /* each carries white initials, so each clears 4.5:1 against white */
+  "Prep Day":"#8263BF","Prep Night":"#B85752","Dinner":"#4D73BF",
+  "Coupure":"#8D7133","Lunch":"#5E7E43","Leave":"#6C7772","Direction":"#AD621E"
 };
 
 var ON_MENU = ["Artichoke","Garlic Gribiche","Pickled Onion","Fish Tartare","Chopped Parsley","Urfa Oil","Caper Leaves","Onion Foam","Langoustine","Cream Oseille","Tzatziki","YellowTail","Lobster butter","Pomelo","Szabzi","Szabzi Tuille","Confit Leeks","Leek Juice","Sabayon Tomer","Fish Stock","Rouget","Leek Velouté / ND","Duck","Orange Gel","Celery Gel","Crumble Tanzia","Duck Jus","Pate","Mantu","Hamoud","Hamoud VEG","pickles coliflowers","Carrot Caviar","FENNEL CONFIT","Topi Confit","Veg Stock","Harif Oil","GF Bread","Brunoise Apple","Brunoise Mango (+green)","Brunoise Rhubarbe","cheese trat /gf/ND","Filo Cones / GF","Cherry BR","LOBSTER TARTAR","Fish Tartar","Razor Clams","Tarama / VEG","BR Mushrooms","Fig Gel","Ayran / ND","Cucumber Salad","Mahleb foam","sake cream","lemon cream","peas","peas jus","moule","toro tuna","mohamara","Gel Carrot Coriandre","Smokey Carrot","Bisque","Bisque Vege","Brocoli","Brunoise Chili","Brunoise Celeri","Cod","Cream Herbs","Cream Herbs ND","Fried chickpeas","Girolle","Muscade Vinaigar","Eggplant VG","Thina foam","B.egg","Relish","Bottarga","Meluhia powder","Sweetbread","Mustard leaves cream","Honey/Mustard Cream","Tempura","Zucchini flours","Zucchini Chiffonade","Veal Jus","Croutons"];
@@ -612,7 +613,7 @@ function viewLogin(){
       + '<p>Pick your name to get started. Ask ' + esc(nameOf("vb")) + ' or Eyal to set you up with an email and a code.</p>'
       + '<div class="plist">' + un.map(function(p){
           var sh = p.shifts[DAY];
-          var col = sh ? (SHIFT_COLOR[sh[0]]||"#7E8A84") : "#7E8A84";
+          var col = sh ? (SHIFT_COLOR[sh[0]]||"#6C7772") : "#6C7772";
           return '<button class="pbtn" data-act="pick" data-id="' + p.id + '">'
             + '<span class="av" style="background:' + col + '">' + esc(p.ini) + '</span>'
             + '<span><span class="pn">' + esc(p.name)
@@ -648,7 +649,7 @@ function viewAccess(){
     var a = S.accounts[p.id] || {};
     var ok = enrolled(p.id);
     return '<div class="acrow">'
-      + '<span class="av" style="background:' + (ok ? 'var(--ok)' : 'var(--ink3)') + '">' + esc(p.ini) + '</span>'
+      + '<span class="av" style="background:' + (ok ? 'var(--av-ok)' : 'var(--av-mute)') + '">' + esc(p.ini) + '</span>'
       + '<span class="acname">' + esc(p.name)
       + (p.role ? ' <span class="chip ac" style="text-transform:none">' + esc(p.role) + '</span>' : '')
       + (isMgmt(p) ? ' <span class="chip ok" style="text-transform:none">management</span>' : '') + '</span>'
@@ -925,7 +926,7 @@ function viewInvoices(){
     + '<button class="btn pri" data-act="addInvoice">Start</button></div>'
     + uploadRow(null)
     + '<div class="kv"><span>Flag a jump over</span>'
-    + '<span><input class="pcount" value="' + esc(String(S.priceJump)) + '" data-jump="1"> <b>%</b></span></div></div></div>';
+    + '<span><input class="pcount" aria-label="Price jump alert threshold, percent" value="' + esc(String(S.priceJump)) + '" data-jump="1"> <b>%</b></span></div></div></div>';
 
   if(!S.invoices.length){
     return h + '<div class="card"><div class="empty">No invoices yet.</div></div>';
@@ -1160,7 +1161,7 @@ function viewService(){
     + '<span class="act">' + extLink(COMBO+WEEK, "Combo", "sm") + '</span></div>'
     + '<div class="brig">' + team.map(function(x){
         var s = x.s, off = !x.p.always && (!s || s[0]==="Leave");
-        var col = x.p.always ? SHIFT_COLOR["Direction"] : (s ? (SHIFT_COLOR[s[0]]||"#7E8A84") : "#7E8A84");
+        var col = x.p.always ? SHIFT_COLOR["Direction"] : (s ? (SHIFT_COLOR[s[0]]||"#6C7772") : "#6C7772");
         return '<div class="person'+(off?" off":"")+'">'
           + '<span class="stripe" style="background:'+col+'"></span>'
           + '<span class="av" style="background:'+col+'">'+esc(x.p.ini)+'</span>'
@@ -1324,7 +1325,7 @@ function viewOrders(){
     + catalogueHTML()
     + '<input id="ord-q" placeholder="Qty" style="flex:0 0 74px" data-enter="addOrder">'
     + '<select id="ord-s">'+SUPPLIERS.map(function(s){return '<option>'+esc(s)+'</option>'}).join("")+'</select>'
-    + '<label class="chip" style="cursor:pointer"><input type="checkbox" id="ord-u" style="margin:0 4px 0 0"> urgent</label>'
+    + '<label class="chip" style="cursor:pointer"><input type="checkbox" id="ord-u" aria-label="Mark this order urgent" style="margin:0 6px 0 0"> urgent</label>'
     + '<button class="btn pri" data-act="addOrder">Add</button></div></div>';
 
   if(!open.length){
@@ -1428,7 +1429,7 @@ function viewHaccp(){
     + '<div class="ban q"><div class="bi">🌡️</div><div><div class="bd">Service readings. What you type here is an reminder — the official register stays in Melba, Hygiene &amp; Traceability.</div></div></div>';
   h += listCard("haccp", S.haccp, "", function(it){
     if(it.kind !== "temp") return "";
-    return '<input class="chip" style="width:66px;padding:2px 6px;text-align:center" value="'+esc(it.value||"")+'" placeholder="°C" data-val="'+it.id+'">';
+    return '<input class="tempin" aria-label="Temperature reading" value="'+esc(it.value||"")+'" placeholder="°C" data-val="'+it.id+'">';
   });
   return h + '</div>';
 }
@@ -1661,11 +1662,11 @@ function chrome(){
   if(!me) h += viewLogin();
 
   if(moreOpen){
-    h += '<div class="mod" data-act="more"><div class="mbox" onclick="event.stopPropagation()">'
+    h += '<div class="mod" data-act="more"><div class="mbox">'
       + '<h3>Everything else</h3><p>The rest of the board \u2014 tap to go there.</p><div class="plist">'
       + rest.map(function(t){
           return '<button class="pbtn" data-act="tab" data-tab="' + t + '">'
-            + '<span class="av" style="background:' + (t===tab?'var(--accent)':'var(--ink3)') + '">'
+            + '<span class="av" style="background:' + (t===tab?'var(--av)':'var(--av-mute)') + '">'
             + ico(t) + '</span>'
             + '<span><span class="pn">' + esc(TAB_LABEL[t]) + '</span>'
             + (counts[t] ? '<span class="ps">' + counts[t] + ' open</span>' : '') + '</span></button>';
@@ -1692,6 +1693,12 @@ function render(){
 
 /* ============ events ============ */
 
+document.addEventListener("keydown", function(e){
+  if(e.key !== "Escape") return;
+  if(moreOpen){ moreOpen = false; render(); return; }
+  if(typeof shareOpen !== "undefined" && shareOpen){ shareOpen = false; render(); }
+});
+
 document.addEventListener("click", function(e){
   var ext = e.target.closest("[data-ext]");
   if(ext){
@@ -1706,7 +1713,11 @@ document.addEventListener("click", function(e){
   if(act==="toggle") return A.toggle(b.getAttribute("data-kind"), b.getAttribute("data-id"));
   if(act==="remove") return A.remove(b.getAttribute("data-kind"), b.getAttribute("data-id"));
   if(act==="tab")    return A.tab(b.getAttribute("data-tab"));
-  if(act==="more")   return A.more();
+  if(act==="more"){
+    /* only the backdrop itself closes the sheet */
+    if(b.classList.contains("mod") && e.target !== b) return;
+    return A.more();
+  }
   if(act==="addInvoice") return A.addInvoice();
   if(act==="openInv")    return A.openInv(b.getAttribute("data-id"));
   if(act==="addLine")    return A.addLine(b.getAttribute("data-id"));

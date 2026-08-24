@@ -241,6 +241,7 @@ new Function(fe);   // must parse
 fs.writeFileSync(path.join(ROOT, 'public', 'app.js'), fe);
 fs.writeFileSync(path.join(ROOT, 'public', 'styles.css'), styles);
 fs.writeFileSync(path.join(ROOT, 'public', 'data.js'),
+  'window.__BOOT__ = window.__BOOT__ || { state:{}, brigade:[], recipes:[], orderCats:{}, suppliers:[] };\n' +
   'window.__BOOT__.recipes = ' + fs.readFileSync(path.join(ROOT, 'seed', 'recipes.json'), 'utf8') + ';\n' +
   'window.__BOOT__.orderCats = ' + fs.readFileSync(path.join(ROOT, 'seed', 'orderCats.json'), 'utf8') + ';\n' +
   'window.__BOOT__.suppliers = ' + fs.readFileSync(path.join(ROOT, 'seed', 'suppliers.json'), 'utf8') + ';\n' +

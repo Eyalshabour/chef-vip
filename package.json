@@ -16,7 +16,8 @@
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js",
     "test:e2e": "node test/e2e.js",
-    "test:all": "npm test && npm run test:e2e"
+    "test:all": "npm test && npm run test:e2e && npm run test:ui",
+    "test:ui": "node test/ui.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -26,5 +27,8 @@
     "express-session": "^1.18.0",
     "node-cron": "^3.0.3",
     "pg": "^8.12.0"
+  },
+  "devDependencies": {
+    "playwright": "1.49"
   }
 }
