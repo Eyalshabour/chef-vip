@@ -65,7 +65,7 @@ const FRESH = () => ({
 });
 
 async function reset() {
-  await pool.query('TRUNCATE audit, board_history, "session" RESTART IDENTITY');
+  await pool.query('TRUNCATE audit, board_history, invoice_files, "session" RESTART IDENTITY');
   await pool.query('UPDATE users SET fail_count = 0, locked_until = NULL, code_hash = NULL, can_order = is_mgmt, email = NULL');
   await pool.query('UPDATE board SET rev = 1, state = $1 WHERE id = 1', [FRESH()]);
   const lim = app && app.get && app.get('limiters');

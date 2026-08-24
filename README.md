@@ -108,6 +108,23 @@ node -e "require('bcryptjs').hash('1234',12).then(console.log)"
 3. Set `MELBA_API_KEY` and `MELBA_API_BASE` in the service's environment.
 4. First deploy runs `migrate` and `seed` automatically.
 
+## Getting an invoice in
+
+1. Photograph it, or save the PDF.
+2. **Invoices → Photograph or attach the invoice.** Straight from the camera on a
+   phone; up to 8 MB; photographs and PDFs only.
+3. Ask Claude to read it. The lines appear with what each product cost last time.
+4. Check what moved, then Apply.
+
+The file is stored in Postgres against the invoice and served back only to a
+signed-in management session. `GET /api/invoices/unread` lists everything
+uploaded and not yet turned into lines — that is the queue Claude works from.
+
+Claude reads the invoice rather than Melba's own scanner, which charges a credit
+a page. The board (the single-page version) has no upload button at all, because
+a published page cannot hold a file; the control is drawn only when the app is
+hosted.
+
 ## Melba
 
 `src/melba.js` reads Melba with one house key, server-side, so the chef and sous

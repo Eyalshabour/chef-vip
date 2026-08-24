@@ -20,7 +20,7 @@ const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(sec.headers);
-app.use(express.json({ limit: '4mb' }));
+app.use(express.json({ limit: '12mb' }));   // an 8MB photo is ~11MB once base64'd
 
 app.use(session({
   store: new PgSession({ pool, tableName: 'session', pruneSessionInterval: 900 }),
@@ -238,6 +238,60 @@ app.post('/api/melba/apply-prices', requireMgmt, melbaLimit, async (req, res) =>
   res.json({ applied: done.length, failed });
 });
 
+/* ---------- the invoice itself ---------- */
+const crypto = require('crypto');
+const FILE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'application/pdf']);
+const MAX_FILE = 8 * 1024 * 1024;
+
+app.post('/api/invoices/file', requireMgmt, async (req, res) => {
+  const { invoiceId, filename, mime, data } = req.body || {};
+  if (typeof data !== 'string' || !data) return res.status(400).json({ error: 'No file.' });
+  if (!FILE_TYPES.has(mime)) return res.status(415).json({ error: 'Photograph or PDF only.' });
+  let buf;
+  try { buf = Buffer.from(data, 'base64'); } catch { return res.status(400).json({ error: 'Could not read that file.' }); }
+  if (!buf.length) return res.status(400).json({ error: 'That file is empty.' });
+  if (buf.length > MAX_FILE) return res.status(413).json({ error: 'Over 8 MB.' });
+
+  const id = crypto.randomBytes(9).toString('base64url');
+  const name = String(filename || 'invoice').slice(0, 120).replace(/[\r\n\0]/g, '');
+  await pool.query(
+    'INSERT INTO invoice_files (id, invoice_id, filename, mime, bytes, data, uploaded_by) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+    [id, invoiceId || null, name, mime, buf.length, buf, req.session.uid]);
+  await audit(req.session.uid, 'invoice_upload', { id, name, bytes: buf.length });
+  res.json({ id, filename: name, bytes: buf.length });
+});
+
+app.get('/api/invoices/file/:id', requireMgmt, async (req, res) => {
+  const { rows } = await pool.query('SELECT filename, mime, data FROM invoice_files WHERE id = $1', [req.params.id]);
+  if (!rows.length) return res.status(404).json({ error: 'No such file.' });
+  res.setHeader('Content-Type', rows[0].mime);
+  res.setHeader('Content-Disposition', 'inline; filename="' + rows[0].filename.replace(/"/g, '') + '"');
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.send(rows[0].data);
+});
+
+/* Everything uploaded and not yet turned into lines - what Claude reads next. */
+app.get('/api/invoices/unread', requireMgmt, async (_req, res) => {
+  const { rows } = await pool.query(
+    'SELECT id, invoice_id, filename, mime, bytes, uploaded_by, created_at' +
+    '  FROM invoice_files WHERE read_at IS NULL ORDER BY created_at DESC LIMIT 50');
+  res.json({ files: rows });
+});
+
+app.post('/api/invoices/file/:id/read', requireMgmt, async (req, res) => {
+  const { rowCount } = await pool.query(
+    'UPDATE invoice_files SET read_at = now(), invoice_id = COALESCE($2, invoice_id) WHERE id = $1',
+    [req.params.id, (req.body && req.body.invoiceId) || null]);
+  if (!rowCount) return res.status(404).json({ error: 'No such file.' });
+  res.json({ ok: true });
+});
+
+app.delete('/api/invoices/file/:id', requireMgmt, async (req, res) => {
+  await pool.query('DELETE FROM invoice_files WHERE id = $1', [req.params.id]);
+  await audit(req.session.uid, 'invoice_file_delete', { id: req.params.id });
+  res.json({ ok: true });
+});
+
 /* ---------- static ---------- */
 app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h', index: false }));
 app.get('*', (req, res) => {
@@ -245,8 +299,16 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
 });
 
-app.use((err, _req, res, _next) => {
-  console.error('[unhandled]', err.message);
+app.use((err, req, res, _next) => {
+  /* A big photograph arrives as a body the parser rejects before any route
+   * sees it. Say so plainly rather than "something went wrong". */
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    return res.status(413).json({ error: 'That file is too big. Photographs up to 8 MB.' });
+  }
+  if (err && (err.type === 'entity.parse.failed' || err.status === 400)) {
+    return res.status(400).json({ error: 'That request could not be read.' });
+  }
+  console.error('[unhandled]', req.method, req.path, '-', err.message);
   res.status(500).json({ error: 'Something went wrong.' });
 });
 

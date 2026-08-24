@@ -39,6 +39,19 @@ CREATE TABLE IF NOT EXISTS board_history (
 );
 CREATE INDEX IF NOT EXISTS board_history_at ON board_history (at DESC);
 
+CREATE TABLE IF NOT EXISTS invoice_files (
+  id          text PRIMARY KEY,
+  invoice_id  text,
+  filename    text NOT NULL,
+  mime        text NOT NULL,
+  bytes       int  NOT NULL,
+  data        bytea NOT NULL,
+  uploaded_by text REFERENCES users(id),
+  read_at     timestamptz,
+  created_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS invoice_files_invoice ON invoice_files (invoice_id);
+
 CREATE TABLE IF NOT EXISTS audit (
   id serial PRIMARY KEY,
   user_id text,

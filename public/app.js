@@ -510,6 +510,24 @@ function icoWA(){
     + '<path fill="currentColor" d="M12 2a10 10 0 0 0-8.7 14.9L2 22l5.3-1.4A10 10 0 1 0 12 2zm0 18a8 8 0 0 1-4.1-1.1l-.3-.2-3.1.8.8-3-.2-.3A8 8 0 1 1 12 20zm4.4-5.8c-.2-.1-1.4-.7-1.6-.8s-.4-.1-.6.1-.6.8-.8 1-.3.2-.6.1a6.6 6.6 0 0 1-3.2-2.8c-.2-.4.2-.4.6-1.2a.5.5 0 0 0 0-.5c0-.1-.6-1.4-.8-1.9s-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3A2.8 2.8 0 0 0 6.7 12a4.9 4.9 0 0 0 1 2.6 11 11 0 0 0 4.3 3.8c1.6.6 2.2.7 3 .6a2.5 2.5 0 0 0 1.7-1.2 2.1 2.1 0 0 0 .1-1.2c-.1-.1-.2-.2-.4-.3z"/></svg>';
 }
 
+
+/* ---- opening something outside the board ----
+ * The board runs in a sandboxed frame, and some of them refuse to let a
+ * page navigate away. So every outside link is an ordinary anchor first,
+ * and if the frame swallows it we hand over the address to copy instead. */
+function extLink(url, label, cls){
+  return '<a class="btn ' + (cls || '') + '" href="' + esc(url) + '" target="_blank" rel="noopener"'
+    + ' data-ext="' + esc(url) + '" data-lbl="' + esc(label) + '">' + esc(label) + ' ↗</a>';
+}
+
+A.ext = function(url, label){
+  var win = null;
+  try { win = window.open(url, "_blank", "noopener"); } catch(e){}
+  if(win) return;
+  share = { title: label || "Open this", text: url };
+  copied = false; render();
+};
+
 function shareModal(){
   if(!share) return "";
   var link = "https://wa.me/?text=" + encodeURIComponent(share.text);
@@ -716,6 +734,54 @@ function invMoves(v){
   });
 }
 
+
+/* ---- uploading the invoice itself ----
+ * Only the hosted app can hold a file. On the board there is nowhere to
+ * put one, so the control simply is not drawn there. One source, two
+ * honest behaviours. */
+function isHosted(){ try { return !!window.__BOOT__; } catch(e){ return false; } }
+
+A.pickFile = function(id){
+  var f = document.getElementById("iv-f-" + (id || "new"));
+  if(f) f.click();
+};
+
+A.upload = function(id, input){
+  var file = input && input.files && input.files[0];
+  if(!file) return;
+  if(file.size > 8 * 1024 * 1024){ toast("That file is over 8 MB"); input.value = ""; return; }
+  toast("Uploading " + file.name);
+  var reader = new FileReader();
+  reader.onload = function(){
+    var b64 = String(reader.result).split(",")[1] || "";
+    api("POST", "/api/invoices/file", {
+      invoiceId: id || null, filename: file.name, mime: file.type || "application/octet-stream", data: b64
+    }).then(function(r){
+      input.value = "";
+      if(!r.ok){ toast((r.json && r.json.error) || "Upload failed"); return; }
+      toast("Uploaded — ask Claude to read it");
+      boot();
+    })["catch"](function(){ input.value = ""; toast("Upload failed"); });
+  };
+  reader.onerror = function(){ toast("Could not read that file"); };
+  reader.readAsDataURL(file);
+};
+
+function uploadRow(id){
+  if(!isHosted()) return "";
+  return '<div class="add">'
+    + '<input type="file" id="iv-f-' + (id || "new") + '" accept="image/*,application/pdf" '
+    + 'capture="environment" style="display:none" data-upload="' + (id || "") + '">'
+    + '<button class="btn" data-act="pickFile" data-id="' + (id || "") + '">📷 Photograph or attach the invoice</button>'
+    + '</div>';
+}
+
+function fileChip(v){
+  if(!v.file) return "";
+  return '<a class="chip ac" href="/api/invoices/file/' + esc(v.file.id) + '" target="_blank" rel="noopener">'
+    + esc(v.file.filename || "invoice") + '</a>';
+}
+
 function viewInvoices(){
   if(!isMgmt(me)){
     return '<div class="gate"><div class="lock">⛔</div><h2>Management only</h2>'
@@ -724,9 +790,17 @@ function viewInvoices(){
 
   var h = '<div class="sec"><div class="sec-h"><h2>Invoices</h2>'
     + '<span class="sub">' + S.invoices.length + ' logged</span></div>'
-    + '<div class="ban q"><div class="bi">🧾</div><div><div class="bd">'
-    + 'Photograph the invoice and send it to me in the chat — I read it and fill the lines in here, no Melba credits spent. '
-    + 'Then check what moved and apply it. Nothing reaches Melba until you say so.'
+    + '<div class="ban"><div class="bi">🧾</div><div>'
+    + '<div class="bt">How an invoice gets in here</div>'
+    + '<div class="bd"><b>1.</b> Photograph it, or save the PDF.<br>'
+    + '<b>2.</b> Send it to Claude in the chat and say <em>&ldquo;read this invoice&rdquo;</em>.<br>'
+    + '<b>3.</b> The lines appear below with what each product cost last time.<br>'
+    + '<b>4.</b> Check what moved, then Apply.'
+    + '</div>'
+    + '<div class="bd" style="margin-top:8px;color:var(--ink3)">'
+    + (isHosted() ? '' : 'There is no upload button on this board \u2014 a published page cannot hold a file. The hosted app has one. ')
+    + 'Claude reads the invoice instead of Melba\'s scanner, which costs you nothing; '
+    + 'Melba charges a credit a page. You can also start one by hand below.'
     + '</div></div></div>';
 
   h += '<div class="card"><div class="add" style="border-top:0">'
@@ -734,6 +808,7 @@ function viewInvoices(){
     + '<input id="iv-n" placeholder="Invoice no." style="flex:1 1 130px" data-enter="addInvoice">'
     + '<input id="iv-d" placeholder="Date" style="flex:0 0 120px" data-enter="addInvoice">'
     + '<button class="btn pri" data-act="addInvoice">Start</button></div>'
+    + uploadRow(null)
     + '<div class="kv"><span>Flag a jump over</span>'
     + '<span><input class="pcount" value="' + esc(String(S.priceJump)) + '" data-jump="1"> <b>%</b></span></div></div></div>';
 
@@ -751,6 +826,7 @@ function viewInvoices(){
     var head = '<button class="rhead' + (open?' on':'') + '" data-act="openInv" data-id="' + v.id + '">'
       + '<span class="rname">' + esc(v.supplier)
       + (v.number ? ' <span class="chip">' + esc(v.number) + '</span>' : '')
+      + fileChip(v)
       + (v.status === "done" ? ' <span class="chip ok">applied</span>' : ' <span class="chip wa">draft</span>')
       + (flags ? ' <span class="chip cr">' + flags + ' jump' + (flags===1?'':'s') + '</span>' : '')
       + '</span>'
@@ -781,6 +857,7 @@ function viewInvoices(){
       + '<input id="il-q-' + v.id + '" placeholder="Qty" style="flex:0 0 86px">'
       + '<input id="il-u-' + v.id + '" placeholder="Unit €" inputmode="decimal" style="flex:0 0 104px">'
       + '<button class="btn pri" data-act="addLine" data-id="' + v.id + '">Add line</button></div>'
+      + uploadRow(v.id)
       + '<div class="shrow" style="margin-top:14px">'
       + (v.status !== "done"
           ? '<button class="btn pri" data-act="applyInv" data-id="' + v.id + '">Apply these prices</button>'
@@ -839,7 +916,14 @@ function ico(k){
   return '<svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" '
     + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (ICO[k]||'') + '</svg>';
 }
-var PRIMARY = ["service","prep","orders","recipes"];
+/* The bottom bar holds four. Which four depends on the job: a director
+ * lives in orders and invoices, a commis lives in the prep sheet and the
+ * book. Everything else is one tap away under More. */
+function primaryFor(p){
+  if(isMgmt(p))   return ["service","prep","orders","invoices"];
+  if(canOrder(p)) return ["service","prep","orders","recipes"];
+  return ["service","prep","recipes","clean"];
+}
 var moreOpen = false;
 
 function icoCheck(){ return '<svg viewBox="0 0 24 24"><polyline points="4 12 10 18 20 6"></polyline></svg>'; }
@@ -890,7 +974,7 @@ function viewService(){
   if(!HAS_ROTA){
     h += '<div class="ban q"><div class="bi">📅</div><div><div class="bt">Rota out of date</div>'
       + '<div class="bd">This board carries the week of 24–30 August 2026. Open Combo for the current week, then ask me to refresh it.</div>'
-      + '<div style="margin-top:8px"><a class="btn sm" href="'+COMBO+WEEK+'" target="_blank" rel="noopener">Open Combo →</a></div></div></div>';
+      + '<div style="margin-top:8px">' + extLink(COMBO+WEEK, "Open Combo", "sm") + '</div></div></div>';
   } else if(!cooksOn.length){
     var pw = DAY.split("-"), wd = new Date(+pw[0], +pw[1]-1, +pw[2]).getDay();
     h += '<div class="ban"><div class="bi">🌙</div><div>'
@@ -916,7 +1000,7 @@ function viewService(){
     + '</div>';
 
   h += '<div class="sec"><div class="sec-h"><h2>The brigade</h2><span class="sub">'+esc(prettyDate(DAY))+'</span>'
-    + '<span class="act"><a class="btn sm" href="'+COMBO+WEEK+'" target="_blank" rel="noopener">Combo →</a></span></div>'
+    + '<span class="act">' + extLink(COMBO+WEEK, "Combo", "sm") + '</span></div>'
     + '<div class="brig">' + team.map(function(x){
         var s = x.s, off = !x.p.always && (!s || s[0]==="Leave");
         var col = x.p.always ? SHIFT_COLOR["Direction"] : (s ? (SHIFT_COLOR[s[0]]||"#7E8A84") : "#7E8A84");
@@ -1323,12 +1407,27 @@ function viewDirection(){
           + (s?'':' <em style="opacity:.6">· repos</em>')+'</span><b>'+score[p.id]+'</b></div>';
       }).join("") + '</div></div>';
 
-  h += '<div class="sec"><div class="sec-h"><h2>Absences</h2><span class="sub">Combo · week 35</span></div>'
+  h += '<div class="sec"><div class="sec-h"><h2>Absences</h2><span class="sub">Combo · week 35</span>'
+    + '<span class="act">' + extLink(COMBO+WEEK, "Combo", "sm") + '</span></div>'
     + '<div class="card">'
     + '<div class="kv"><span>Samuel CHARUET</span><b style="color:var(--warn)">paid leave · Fri + Sat</b></div>'
     + '<div class="kv"><span>Lior HAGAI</span><b style="color:var(--crit)">unjustified absence · Tue → Sat</b></div>'
     + '<div class="note">Lior does not appear on the brigade\'s shared board — that is a management matter, not a service one. Tell me if you want him back on it.</div>'
     + '</div></div>';
+
+  h += '<div class="sec"><div class="sec-h"><h2>Open in Melba</h2>'
+    + '<span class="sub">app.melba.io</span></div><div class="lg">'
+    + [["🍽","Recipes","the book itself",MELBA.recipes],
+       ["🥬","Ingredients","costs and supplier",MELBA.ingredients],
+       ["🚚","Suppliers","the address book",MELBA.suppliers],
+       ["📦","Stock movements","in and out",MELBA.stock],
+       ["📈","Analysis","food cost",MELBA.analytics],
+       ["🔌","Extensions","connect Claude",MELBA.extensions]].map(function(l){
+        return '<a class="lk" href="' + esc(l[3]) + '" target="_blank" rel="noopener"'
+          + ' data-ext="' + esc(l[3]) + '" data-lbl="' + esc(l[1]) + '">'
+          + '<span class="li">' + l[0] + '</span><span><span class="lt">' + esc(l[1]) + '</span>'
+          + '<span class="ld">' + esc(l[2]) + '</span></span></a>';
+      }).join("") + '</div></div>';
 
   h += viewAccess();
 
@@ -1380,7 +1479,7 @@ function chrome(){
         + (counts[t] ? '<span class="n">'+counts[t]+'</span>' : '') + '</button>';
     }).join("") + '</div></nav>';
 
-  var primary = PRIMARY.filter(function(t){ return visible.indexOf(t) >= 0; });
+  var primary = primaryFor(me).filter(function(t){ return visible.indexOf(t) >= 0; });
   var rest    = visible.filter(function(t){ return primary.indexOf(t) < 0; });
   var restN   = rest.reduce(function(a,t){ return a + (counts[t]||0); }, 0);
   h += '<nav class="botnav">' + primary.map(function(t){
@@ -1406,7 +1505,7 @@ function chrome(){
 
   if(moreOpen){
     h += '<div class="mod" data-act="more"><div class="mbox" onclick="event.stopPropagation()">'
-      + '<h3>More</h3><p>The rest of the board.</p><div class="plist">'
+      + '<h3>Everything else</h3><p>The rest of the board \u2014 tap to go there.</p><div class="plist">'
       + rest.map(function(t){
           return '<button class="pbtn" data-act="tab" data-tab="' + t + '">'
             + '<span class="av" style="background:' + (t===tab?'var(--accent)':'var(--ink3)') + '">'
@@ -1437,6 +1536,13 @@ function render(){
 /* ============ events ============ */
 
 document.addEventListener("click", function(e){
+  var ext = e.target.closest("[data-ext]");
+  if(ext){
+    var url = ext.getAttribute("data-ext"), opened = null;
+    try { opened = window.open(url, "_blank", "noopener"); } catch(err){}
+    if(!opened){ e.preventDefault(); A.ext(url, ext.getAttribute("data-lbl")); }
+    return;
+  }
   var b = e.target.closest("[data-act]");
   if(!b) return;
   var act = b.getAttribute("data-act");
@@ -1450,6 +1556,7 @@ document.addEventListener("click", function(e){
   if(act==="rmLine")     return A.rmLine(b.getAttribute("data-id"), b.getAttribute("data-lid"));
   if(act==="applyInv")   return A.applyInv(b.getAttribute("data-id"));
   if(act==="rmInv")      return A.rmInv(b.getAttribute("data-id"));
+  if(act==="pickFile")   return A.pickFile(b.getAttribute("data-id"));
   if(act==="pick")   return A.pick(b.getAttribute("data-id"));
   if(act==="whoami") return A.forget();
   if(act==="addPrep")  return A.addPrep();
@@ -1502,6 +1609,7 @@ document.addEventListener("change", function(e){
   if(t && t.dataset && t.dataset.prot){ A.setProt(t.dataset.prot, t.value); save(); }
   if(t && t.dataset && t.dataset.mail){ A.setEmail(t.dataset.mail, t.value); save(); }
   if(t && t.dataset && t.dataset.jump){ A.setJump(t.value); save(); }
+  if(t && t.dataset && t.dataset.upload !== undefined){ A.upload(t.dataset.upload || null, t); }
 });
 
 /* ============ boot ============ */
