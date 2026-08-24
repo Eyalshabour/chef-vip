@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: chef-vip
+    runtime: node
+    plan: starter
+    buildCommand: npm ci && npm run migrate && npm run seed
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: chef-vip-db, property: connectionString }
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: NODE_ENV
+        value: production
+      - key: RUN_JOBS
+        value: "1"
+      - key: MELBA_API_KEY
+        sync: false
+      - key: MELBA_API_BASE
+        sync: false
+
+databases:
+  - name: chef-vip-db
+    plan: basic-256mb
