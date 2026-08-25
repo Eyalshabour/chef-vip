@@ -75,3 +75,75 @@ test('management acts are written to the audit trail', async () => {
   a.ok(actions.includes('set_code'));
   a.ok(rows.every(r => r.user_id === 'ee' || r.user_id === null));
 });
+
+/* ---------------------------------------------------------------
+ * Photographing an invoice is not reading one. Whoever takes the
+ * delivery can put the picture in; what it cost stays management's.
+ * ------------------------------------------------------------- */
+const PIC = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+  'base64');
+const photograph = c => c.post('/api/invoices/file', {
+  invoiceId: null, filename: 'vergers.png', mime: 'image/png', data: PIC.toString('base64') });
+
+test('a cook cannot photograph an invoice until told they may', async () => {
+  const c = await asCook();
+  a.equal((await photograph(c)).status, 403);
+});
+
+test('granting it lets them add a picture — and nothing else', async () => {
+  const d = await asDir();
+  a.equal((await d.post('/api/users/mr/invoice')).json.invoice, true);
+
+  const c = await asCook();
+  const up = await photograph(c);
+  a.equal(up.status, 200, 'the picture goes in');
+
+  /* and that is the whole of it */
+  a.equal((await c.get('/api/invoices/file/' + up.json.id)).status, 403, 'cannot open it again');
+  a.equal((await c.get('/api/invoices/unread')).status, 403, 'cannot see the pile');
+  a.equal((await c.del('/api/invoices/file/' + up.json.id)).status, 403, 'cannot delete it');
+
+  /* management can read what was left for them */
+  a.equal((await d.get('/api/invoices/file/' + up.json.id)).status, 200);
+});
+
+test('the invoice grant toggles, and management cannot be granted it', async () => {
+  const d = await asDir();
+  a.equal((await d.post('/api/users/mr/invoice')).json.invoice, true);
+  a.equal((await d.post('/api/users/mr/invoice')).json.invoice, false);
+  a.equal((await d.post('/api/users/vb/invoice')).status, 400, 'the chef always can');
+  a.equal((await d.post('/api/users/zz/invoice')).status, 404, 'and an unknown id is refused');
+});
+
+test('a cook cannot grant it to themselves', async () => {
+  const c = await asCook();
+  a.equal((await c.post('/api/users/mr/invoice')).status, 403);
+});
+
+test('revoking access takes the invoice grant with it', async () => {
+  const d = await asDir();
+  await d.post('/api/users/mr/invoice');
+  await d.del('/api/users/mr/access');
+  const { rows } = await h.pool.query("SELECT can_invoice FROM users WHERE id = 'mr'");
+  a.equal(rows[0].can_invoice, false);
+});
+
+/* ---------------------------------------------------------------
+ * Ten tabs is nine too many for a commis. What a person can open is
+ * what their job touches — and the server has to agree, not just the
+ * bottom bar.
+ * ------------------------------------------------------------- */
+test('a cook is refused every screen that is not theirs', async () => {
+  const c = await asCook();
+  for (const [method, path] of [
+    ['get', '/api/melba/summary'],
+    ['get', '/api/invoices/unread'],
+    ['post', '/api/users/es/order'],
+    ['post', '/api/users/es/invoice'],
+  ]) {
+    const r = await c[method](path);
+    a.ok(r.status === 403 || r.status === 401,
+      `${method.toUpperCase()} ${path} answered ${r.status}, not a refusal`);
+  }
+});

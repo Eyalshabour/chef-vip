@@ -1,12 +1,13 @@
 'use strict';
 require('dotenv').config();
+const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
 const PgSession = require('connect-pg-simple')(session);
 
 const { pool } = require('./db');
-const { hash, verify, publicUser, requireUser, requireMgmt, requireOrders } = require('./auth');
+const { hash, verify, publicUser, requireUser, requireMgmt, requireOrders, requireInvoice } = require('./auth');
 const sec = require('./security');
 const melba = require('./melba');
 const prices = require('./prices');
@@ -103,7 +104,8 @@ async function boardPayload(uid) {
   state.rev = b[0].rev;
   state.accounts = {};
   for (const p of people) {
-    state.accounts[p.id] = { email: p.email || '', code: p.code_hash ? 'set' : '', order: p.can_order };
+    state.accounts[p.id] = { email: p.email || '', code: p.code_hash ? 'set' : '',
+      order: p.can_order, invoice: p.can_invoice };
   }
   const me = people.find(p => p.id === uid);
   return { state, user: me ? publicUser(me) : null, brigade: people.map(publicUser), readOnly: false };
@@ -177,11 +179,23 @@ app.post('/api/users/:id/order', requireMgmt, async (req, res) => {
   res.json({ canOrder: rows[0].can_order });
 });
 
+app.post('/api/users/:id/invoice', requireMgmt, async (req, res) => {
+  const { id } = req.params;
+  if (!sec.isId(id)) return res.status(400).json({ error: 'Unknown person.' });
+  const { rows } = await pool.query('SELECT is_mgmt, can_invoice FROM users WHERE id = $1', [id]);
+  if (!rows.length) return res.status(404).json({ error: 'Unknown person.' });
+  if (rows[0].is_mgmt) return res.status(400).json({ error: 'Management always can.' });
+  const next = !rows[0].can_invoice;
+  await pool.query('UPDATE users SET can_invoice = $1 WHERE id = $2', [next, id]);
+  audit(req.session.uid, next ? 'invoice_granted' : 'invoice_revoked', { id });
+  res.json({ ok: true, invoice: next });
+});
+
 app.delete('/api/users/:id/access', requireMgmt, async (req, res) => {
   if (!sec.isId(req.params.id)) return res.status(400).json({ error: 'Unknown person.' });
   if (req.params.id === req.session.uid) return res.status(400).json({ error: 'You cannot lock yourself out.' });
   await pool.query(
-    'UPDATE users SET code_hash = NULL, can_order = false, fail_count = 0, locked_until = NULL WHERE id = $1',
+    'UPDATE users SET code_hash = NULL, can_order = false, can_invoice = false, fail_count = 0, locked_until = NULL WHERE id = $1',
     [req.params.id]);
   await audit(req.session.uid, 'revoke_access', { for: req.params.id });
   res.json({ ok: true });
@@ -243,7 +257,7 @@ const crypto = require('crypto');
 const FILE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'application/pdf']);
 const MAX_FILE = 8 * 1024 * 1024;
 
-app.post('/api/invoices/file', requireMgmt, async (req, res) => {
+app.post('/api/invoices/file', requireInvoice, async (req, res) => {
   const { invoiceId, filename, mime, data } = req.body || {};
   if (typeof data !== 'string' || !data) return res.status(400).json({ error: 'No file.' });
   if (!FILE_TYPES.has(mime)) return res.status(415).json({ error: 'Photograph or PDF only.' });
@@ -292,11 +306,52 @@ app.delete('/api/invoices/file/:id', requireMgmt, async (req, res) => {
   res.json({ ok: true });
 });
 
-/* ---------- static ---------- */
-app.use(express.static(path.join(__dirname, '..', 'public'), { maxAge: '1h', index: false }));
+/* ---------- static ----------
+ *
+ * Deploying used to leave people on an hour-old app.js, because the files
+ * were cached by name and the name never changed. Worse than slow: a fresh
+ * index.html could pair with a stale app.js and the two disagree about what
+ * exists. The brigade saw tabs a week after they were removed.
+ *
+ * So every asset URL now carries a hash of its own contents. A file that
+ * changed gets a new URL and is fetched; a file that did not is served from
+ * cache forever. index.html itself is never cached — it is 1KB and it is
+ * the thing that names the others.
+ */
+const PUBLIC = path.join(__dirname, '..', 'public');
+const stamp = f => {
+  try {
+    return crypto.createHash('sha1')
+      .update(fs.readFileSync(path.join(PUBLIC, f))).digest('hex').slice(0, 10);
+  } catch { return String(Date.now()); }
+};
+const ASSET_V = { 'app.js': stamp('app.js'), 'data.js': stamp('data.js'), 'styles.css': stamp('styles.css') };
+
+const SHELL = (() => {
+  let html = fs.readFileSync(path.join(PUBLIC, 'index.html'), 'utf8');
+  for (const [file, v] of Object.entries(ASSET_V)) {
+    html = html.split('/' + file + '"').join('/' + file + '?v=' + v + '"');
+  }
+  return html;
+})();
+
+app.use(express.static(PUBLIC, {
+  index: false,
+  etag: true,
+  setHeaders(res, filePath) {
+    /* a versioned URL can be kept forever; an unversioned one must be
+       revalidated, or we are back where we started */
+    const versioned = res.req && res.req.query && res.req.query.v;
+    res.setHeader('Cache-Control', versioned
+      ? 'public, max-age=31536000, immutable'
+      : 'no-cache');
+  },
+}));
+
 app.get('*', (req, res) => {
   if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'No such route.' });
-  res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
+  res.setHeader('Cache-Control', 'no-store');
+  res.type('html').send(SHELL);
 });
 
 app.use((err, req, res, _next) => {

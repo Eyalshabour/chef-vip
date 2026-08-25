@@ -1,9 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#141917"/>
-  <g fill="none" stroke="#E29A57" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M170 118v112a44 44 0 0 0 88 0V118"/>
-    <path d="M214 230v164"/>
-    <path d="M340 118c-22 30-32 60-32 90s10 46 32 46 32-16 32-46-10-60-32-90z"/>
-    <path d="M340 254v140"/>
+  <!-- The house mark: the two cut diamonds from the Shabour logotype. -->
+  <rect width="512" height="512" rx="96" fill="#0B0C0D"/>
+  <g fill="#F1F1EE" transform="translate(256 256)">
+    <g transform="translate(-73 -156) scale(1)">
+      <path d="M106.52 39.46C91.41 24.36 73 0 73 0s-15.9 21.84-33.52 39.46C20.56 58.38.02 72.98.02 72.98s24.36 18.41 39.46 33.52C54.58 121.6 73 145.96 73 145.96s15.89-21.84 33.52-39.46C125.44 87.57 145.98 72.98 145.98 72.98s-24.36-18.42-39.46-33.52Z"/>
+    </g>
+    <g transform="translate(-73 10) scale(1)">
+      <path d="M106.52 39.46C91.41 24.36 73 0 73 0s-15.9 21.84-33.52 39.46C20.56 58.38.02 72.98.02 72.98s24.36 18.41 39.46 33.52C54.58 121.6 73 145.96 73 145.96s15.89-21.84 33.52-39.46C125.44 87.57 145.98 72.98 145.98 72.98s-24.36-18.42-39.46-33.52Z"/>
+    </g>
   </g>
 </svg>

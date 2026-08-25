@@ -22,7 +22,7 @@ const VIEWPORTS = [
   { name: 'iPad landscape',width: 1180, height: 820,  mobile: true },
   { name: 'Desktop',       width: 1440, height: 900,  mobile: false },
 ];
-const TABS = ['service', 'prep', 'orders', 'recipes', 'clean', 'pertes', 'transferts', 'invoices', 'haccp', 'direction'];
+const TABS = ['service', 'prep', 'orders', 'recipes', 'clean', 'invoices', 'haccp', 'direction'];
 
 const findings = [];
 let checks = 0;

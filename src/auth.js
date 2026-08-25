@@ -78,14 +78,27 @@ async function requireOrders(req, res, next) {
  * once, and only while his is still unset: a code already in place is
  * never overwritten by a redeploy.
  * ------------------------------------------------------------- */
-async function bootstrap(db, id, code) {
+async function bootstrap(db, id, code, opts = {}) {
   if (!/^\d{4}$/.test(String(code || ''))) return { ok: false, why: 'not four digits' };
   const { rows } = await db.query('SELECT code_hash FROM users WHERE id = $1', [id]);
   if (!rows.length) return { ok: false, why: 'no such person' };
-  if (rows[0].code_hash) return { ok: false, why: 'already set' };
+  if (rows[0].code_hash && !opts.force) return { ok: false, why: 'already set' };
   await db.query('UPDATE users SET code_hash = $1, fail_count = 0, locked_until = NULL WHERE id = $2',
     [await hash(code), id]);
-  return { ok: true };
+  /* the same lever unlocks a locked-out account, because the two ways to be
+     shut out of a kitchen at 6pm deserve one way back in */
+  return { ok: true, replaced: !!rows[0].code_hash };
 }
 
-module.exports = { hash, verify, publicUser, requireUser, requireMgmt, requireOrders, MAX_FAILS, LOCK_MS, bootstrap };
+/* Photographing an invoice is not reading one. A cook with this can put a
+ * picture into the pending pile; only management can open, download, price
+ * or delete what lands there. */
+async function requireInvoice(req, res, next) {
+  if (!req.session || !req.session.uid) return res.status(401).json({ error: 'Sign in first.' });
+  if (req.session.isMgmt) return next();
+  const { rows } = await pool.query('SELECT can_invoice FROM users WHERE id = $1', [req.session.uid]);
+  if (rows[0] && rows[0].can_invoice) return next();
+  return res.status(403).json({ error: 'Not your list.' });
+}
+
+module.exports = { hash, verify, publicUser, requireUser, requireMgmt, requireOrders, requireInvoice, MAX_FAILS, LOCK_MS, bootstrap };

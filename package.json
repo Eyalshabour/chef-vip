@@ -16,9 +16,12 @@
     "test": "node --test test/*.test.js",
     "test:watch": "node --test --watch test/*.test.js",
     "test:e2e": "node test/e2e.js",
-    "test:all": "npm test && npm run test:e2e && npm run test:ordering && npm run test:ui",
+    "test:all": "npm test && npm run test:e2e && npm run test:boot && npm run test:ordering && npm run test:welcome && npm run test:haccp && npm run test:ui",
+    "test:haccp": "node test/haccp.js",
+    "test:boot": "node test/boot.js",
     "test:ordering": "node test/ordering.js",
-    "test:ui": "node test/ui.js"
+    "test:ui": "node test/ui.js",
+    "test:welcome": "node test/welcome.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

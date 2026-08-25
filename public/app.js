@@ -22,6 +22,16 @@ PEOPLE = BRIGADE;   /* same array, so a refresh reaches both */
 var PEOPLE;   /* aliased below, once BRIGADE exists */
 var MGMT = {ee:1, vb:1, ha:1};
 function isMgmt(p){ return !!(p && MGMT[p.id]); }
+/* Photographing an invoice is not reading one: this lets a cook put a
+   picture into the pending pile, and nothing else. Opening, downloading,
+   pricing and deleting stay with management. */
+function canInvoice(p){
+  if(!p) return false;
+  if(MGMT[p.id]) return true;
+  var a = S.accounts && S.accounts[p.id];
+  return !!(a && a.invoice);
+}
+
 function canOrder(p){
   if(!p) return false;
   if(MGMT[p.id]) return true;
@@ -40,6 +50,44 @@ var SHIFT_COLOR = {
 var ON_MENU = ["Artichoke","Garlic Gribiche","Pickled Onion","Fish Tartare","Chopped Parsley","Urfa Oil","Caper Leaves","Onion Foam","Langoustine","Cream Oseille","Tzatziki","YellowTail","Lobster butter","Pomelo","Szabzi","Szabzi Tuille","Confit Leeks","Leek Juice","Sabayon Tomer","Fish Stock","Rouget","Leek Velouté / ND","Duck","Orange Gel","Celery Gel","Crumble Tanzia","Duck Jus","Pate","Mantu","Hamoud","Hamoud VEG","pickles coliflowers","Carrot Caviar","FENNEL CONFIT","Topi Confit","Veg Stock","Harif Oil","GF Bread","Brunoise Apple","Brunoise Mango (+green)","Brunoise Rhubarbe","cheese trat /gf/ND","Filo Cones / GF","Cherry BR","LOBSTER TARTAR","Fish Tartar","Razor Clams","Tarama / VEG","BR Mushrooms","Fig Gel","Ayran / ND","Cucumber Salad","Mahleb foam","sake cream","lemon cream","peas","peas jus","moule","toro tuna","mohamara","Gel Carrot Coriandre","Smokey Carrot","Bisque","Bisque Vege","Brocoli","Brunoise Chili","Brunoise Celeri","Cod","Cream Herbs","Cream Herbs ND","Fried chickpeas","Girolle","Muscade Vinaigar","Eggplant VG","Thina foam","B.egg","Relish","Bottarga","Meluhia powder","Sweetbread","Mustard leaves cream","Honey/Mustard Cream","Tempura","Zucchini flours","Zucchini Chiffonade","Veal Jus","Croutons"];
 var ON_MENU_KEY = (function(){ var m={}; ON_MENU.forEach(function(x){ m[x.toLowerCase().replace(/[^a-z0-9]/g,"")]=1; }); return m; })();
 function onMenu(name){ return !!ON_MENU_KEY[String(name||"").toLowerCase().replace(/[^a-z0-9]/g,"")]; }
+
+/* ---- the recipe behind a prep line ----
+   Only an exact name is ever called "the recipe". A board that answers
+   "Fish Tartare" with the Fish Stock method is worse than a board with no
+   button at all — the cook trusts it and makes the wrong thing. Anything
+   looser is offered as a suggestion he picks himself, never as an answer. */
+var _recKey = null;
+function recKey(){
+  if(_recKey) return _recKey;
+  _recKey = {};
+  RECIPES.forEach(function(r, i){
+    var k = rankKey(r.n);
+    if(k && !(k in _recKey)) _recKey[k] = i;
+  });
+  return _recKey;
+}
+function recFor(title){
+  var i = recKey()[rankKey(title)];
+  return i == null ? -1 : i;
+}
+function recWords(s){
+  return String(s == null ? "" : s).toLowerCase().replace(/[^a-z0-9]+/g, " ")
+    .split(" ").filter(function(w){ return w.length > 2; });
+}
+/* the handful of names in the book that share a real word with this line */
+function recNear(title, n){
+  var tw = recWords(title);
+  if(!tw.length) return [];
+  var out = [];
+  RECIPES.forEach(function(r, i){
+    var rw = recWords(r.n), c = 0;
+    tw.forEach(function(w){ if(rw.indexOf(w) >= 0) c++; });
+    if(c) out.push({ i: i, s: c / Math.max(tw.length, rw.length) });
+  });
+  out.sort(function(a, b){ return b.s - a.s; });
+  return out.slice(0, n || 3).map(function(x){ return x.i; });
+}
+
 var PREP_EXTRA = ["Onion Foam", "Cream Oseille", "Tzatziki", "Lobster butter", "Pomelo", "Brunoise Apple", "Brunoise Mango (+green)", "Brunoise Rhubarbe"];
 var _prepList = null;
 function PREP_LIST_get(){
@@ -84,14 +132,30 @@ var HACCP_SEED = [
 
 /* ============ state ============ */
 
-var S = (window.__BOOT__ && window.__BOOT__.state) || {};
-/* The sign-in screen renders before any board has arrived, so S must be
- * safe to read from the very first paint. */
-S.accounts = S.accounts || {};
-S.prep = S.prep || []; S.orders = S.orders || []; S.clean = S.clean || []; S.haccp = S.haccp || [];
-S.waste = S.waste || []; S.transfers = S.transfers || []; S.proteins = S.proteins || [];
-S.notes = S.notes || []; S.invoices = S.invoices || []; S.prices = S.prices || {};
-S.recArch = S.recArch || {}; if(S.priceJump == null) S.priceJump = 10;
+/* Every board that arrives goes through here: the first paint, the one that
+ * comes back with the sign-in, a poll, and a save that lost the race.
+ *
+ * A board written by an older version of the app is missing whatever was
+ * added since, and the first thing render() does is count S.invoices.
+ * Defaulting only the first copy was not enough — signing in replaced it
+ * with the server's, so the screen went blank at the moment the code was
+ * RIGHT, which reads exactly like a broken sign-in button. */
+function fill(st){
+  st = st || {};
+  st.accounts = st.accounts || {};
+  st.prep = st.prep || []; st.orders = st.orders || []; st.clean = st.clean || [];
+  st.haccp = st.haccp || []; st.waste = st.waste || []; st.transfers = st.transfers || [];
+  st.proteins = st.proteins || []; st.notes = st.notes || []; st.invoices = st.invoices || [];
+  st.pinned = st.pinned || []; st.log = st.log || [];
+  st.hac = st.hac || {};
+  st.ordCat = st.ordCat || [];
+  st.prices = st.prices || {}; st.recArch = st.recArch || {};
+  if(st.priceJump == null) st.priceJump = 10;
+  if(st.rev == null) st.rev = 1;
+  return st;
+}
+
+var S = fill((window.__BOOT__ && window.__BOOT__.state) || {});
 
 var RECIPES    = window.__BOOT__.recipes;
 var ORDER_CATS = window.__BOOT__.orderCats;
@@ -106,16 +170,23 @@ S.invoices = S.invoices || []; S.prices = S.prices || {};
 if(S.priceJump == null) S.priceJump = 10;
 S.rev = S.rev || 1;
 
-var TABS_ALL = ["service","prep","orders","recipes","clean","pertes","transferts","invoices","haccp","direction"];
+var TABS_ALL = ["service","prep","orders","recipes","clean","invoices","haccp","direction"];
+/* Ten tabs is nine too many for a commis. A cook sees the six things a
+   cook touches; ordering, transfers, invoices and management appear only
+   for whoever actually holds them. Nobody is hunting through a menu for a
+   screen they are not allowed to open anyway. */
+var TABS_COOK = ["service","prep","recipes","clean","haccp"];
+
 function TABS_get(){
+  if(isMgmt(me)) return TABS_ALL.slice();
   return TABS_ALL.filter(function(t){
-    if(t === "direction") return isMgmt(me);
-    if(t === "invoices")  return isMgmt(me);
-    if(t === "orders")    return canOrder(me);
-    return true;
+    if(t === "direction")  return false;
+    if(t === "invoices")   return canInvoice(me);
+    if(t === "orders")     return canOrder(me);
+    return TABS_COOK.indexOf(t) >= 0;
   });
 }
-var TAB_LABEL = {service:"Service",prep:"Prep",orders:"Orders",recipes:"Recipes",clean:"Cleaning",haccp:"HACCP",pertes:"Waste",transferts:"Transfers",invoices:"Invoices",direction:"Management"};
+var TAB_LABEL = {service:"Service",prep:"Prep",orders:"Orders",recipes:"Recipes",clean:"Cleaning",haccp:"HACCP",invoices:"Invoices",direction:"Management"};
 var tab = "service";
 try { var t = sessionStorage.getItem("sp.tab"); if (TABS_ALL.indexOf(t)>=0) tab = t; } catch(e){}
 
@@ -127,7 +198,14 @@ var readOnly = false, busy = false, toastMsg = null, toastT = null;
 /* direction */
 var dirOpen = false, codeErr = null;
 var rq = "", openRec = null;
-var showOld = false, recView = "menu";
+/* the prep line whose recipe is open on the welcome screen, and — when the
+   book had no exact name and the cook picked from the near ones — which
+   recipe he picked for that line */
+var srecLine = null, srecPick = {};
+var showOld = false, showOldOrd = false, recView = "menu";
+/* how the order catalogue is stacked on screen: by the supplier you phone,
+   or by the family the product belongs to. Nothing about the data changes. */
+var ordGroup = "sup";
 var openInv = null;
 var share = null, copied = false;
 var loginErr = null, loginMode = "code";
@@ -197,7 +275,7 @@ function save(msg){
 function flush(){
   api("PUT", "/api/state", {rev: S.rev, state: S}).then(function(r){
     dirty = false;
-    if(r.status === 409){ S = r.json.state; render(); toast("Someone else saved first - reloaded"); return; }
+    if(r.status === 409){ S = fill(r.json.state); render(); toast("Someone else saved first - reloaded"); return; }
     if(r.status === 401){ me = null; render(); return; }
     if(r.status === 403){ toast("Session expired - reload the page"); render(); return; }
     if(!r.ok){ toast((r.json && r.json.error) || "Could not save, try again"); render(); return; }
@@ -207,7 +285,7 @@ function flush(){
 function poll(){
   if(dirty || !me) return;
   api("GET", "/api/state").then(function(r){
-    if(r.ok && r.json && r.json.state && r.json.state.rev !== S.rev){ S = r.json.state; render(); }
+    if(r.ok && r.json && r.json.state && r.json.state.rev !== S.rev){ S = fill(r.json.state); render(); }
   })["catch"](function(){});
 }
 
@@ -304,11 +382,12 @@ function byCatalogue(list){
   }).map(function(x){ return x.o; });
 }
 
-A.addPrep = function(){
+A.addPrep = function(where){
   /* The prep form is one field. It read three, and threw on the two that
      were never rendered — which is why nothing could be added to the sheet.
      Read what is there; treat the rest as optional. */
-  var t = document.getElementById("prep-t");
+  var w = where || "cat";
+  var t = document.getElementById("prep-t-" + w) || document.getElementById("prep-t-cat");
   if(!t || !t.value.trim()){ if(t) t.focus(); return; }
   var q  = document.getElementById("prep-q");
   var st = document.getElementById("prep-s");
@@ -317,10 +396,11 @@ A.addPrep = function(){
     qty: q ? q.value.trim() : "",
     station: st ? st.value : "",
     restr:"", adv:false, done:false, by:null, at:null,
+    todo: w !== "cat",
     addedBy: me ? me.id : null
   }, prepRank());
   t.value = ""; if(q) q.value = "";
-  save();
+  save(w === "cat" ? "" : t.value);
 };
 
 A.addOrder = function(){
@@ -381,20 +461,6 @@ A.addNote = function(){
   var st = stamp();
   S.notes.push({id:uid(), text:t.value.trim(), by:st.by, at:st.at});
   t.value=""; save();
-};
-A.addWaste = function(){
-  var p = document.getElementById("w-p"), a = document.getElementById("w-a"), w = document.getElementById("w-w");
-  if(!p.value.trim()){ p.focus(); return; }
-  var st = stamp();
-  S.waste.push({id:uid(), title:p.value.trim(), qty:a.value.trim(), why:w.value.trim(), by:st.by, at:st.at});
-  p.value=""; a.value=""; w.value=""; save();
-};
-A.addTransfer = function(){
-  var p = document.getElementById("t-p"), a = document.getElementById("t-a"), d = document.getElementById("t-d");
-  if(!p.value.trim()){ p.focus(); return; }
-  var st = stamp();
-  S.transfers.push({id:uid(), title:p.value.trim(), qty:a.value.trim(), when:d.value.trim(), by:st.by, at:st.at});
-  p.value=""; a.value=""; d.value=""; save();
 };
 
 A.newDay = function(){
@@ -465,6 +531,316 @@ A.reorder = function(){
   })["catch"](function(e){ live.reorderErr = e; live.reorderBusy = false; render(); });
 };
 
+/* The 136 lines are the kitchen's catalogue, not today's work. A line is
+   promoted onto today's sheet with +, and dropped off it again with the
+   same button. Nothing is deleted either way. */
+/* The order pad gets the same shape as the prep sheet: a catalogue of what
+   the kitchen buys, and an Old drawer for what it has stopped buying. The
+   working list stays short enough to read at 7am. */
+/* The families are the ordering sheet's own sections, read straight off the
+   xlsx, and they run in the sheet's own order — VEG first, FISH last. Where
+   DAIRY ends and MEAT begins is the five-row gap the sheet itself leaves in
+   that column, not a judgement of mine. Boards seeded before this carry the
+   headings I had invented, so those are mapped over on the way in rather
+   than dropped into OTHER. */
+var CAT_ORDER = Object.keys(ORDER_CATS);
+var CAT_OLD = {"Veg & fruit":"VEG","Herbs":"VEG","Dairy":"DAIRY",
+               "Protein":"MEAT","Fish":"FISH","Dry":"DRY"};
+/* Three of the houses are named for what they sell, so a fresh catalogue can
+   put the veg with the greengrocer and the cheese with the cremerie without
+   anyone typing it. Fish and dry goods come from several houses depending on
+   the week — guessing there would be wrong more often than right, so they
+   land in "Other" where they are visibly waiting to be assigned. */
+var CAT_SUP = {"VEG":"veg","DAIRY":"dairy","MEAT":"meat"};
+function supLike(word){
+  for(var i=0;i<SUPPLIERS.length;i++){
+    if(SUPPLIERS[i].toLowerCase().indexOf(word) >= 0) return SUPPLIERS[i];
+  }
+  return null;
+}
+function defSupplier(cat){
+  var w = CAT_SUP[cat];
+  return (w && supLike(w)) || supLike("other") || SUPPLIERS[0];
+}
+function catLabel(c){ return String(c || "OTHER").toUpperCase(); }
+/* which family the sheet files a product under — the sheet's answer, not a
+   guess from the name */
+var _catOf = null;
+function catOf(title){
+  if(!_catOf){
+    _catOf = {};
+    Object.keys(ORDER_CATS).forEach(function(c){
+      ORDER_CATS[c].forEach(function(p){
+        var k = rankKey(p);
+        if(k && !(k in _catOf)) _catOf[k] = c;
+      });
+    });
+  }
+  return _catOf[rankKey(title)] || null;
+}
+
+/* where a family sits on the paper; anything unknown falls to the end */
+function catPos(c){ var i = CAT_ORDER.indexOf(c); return i < 0 ? 999 : i; }
+
+function ordCat(){
+  S.ordCat = S.ordCat || [];
+  var rank = catRank();
+  S.ordCat.forEach(function(x){
+    /* A line filed under one of the headings I had invented, or under none,
+       is re-read against the sheet — the sheet's own answer first, the old
+       heading second, and only then OTHER. */
+    if(!(x.cat in ORDER_CATS)) x.cat = catOf(x.title) || CAT_OLD[x.cat] || "OTHER";
+    /* Suppliers come and go. A catalogue line still pointing at one that has
+       left would show a select with nothing selected and quietly order from
+       whoever happens to be first — so it is moved to the top of the list and
+       the change is visible. */
+    if(SUPPLIERS.indexOf(x.sup) < 0) x.sup = defSupplier(x.cat);
+  });
+  /* However the lines were added, the screen reads in the order of the paper
+     it replaces. Anything the sheet has never heard of sits after the rest. */
+  S.ordCat.sort(function(a, b){
+    var pa = catPos(a.cat), pb = catPos(b.cat);
+    if(pa !== pb) return pa - pb;
+    var ra = rank[rankKey(a.title)], rb = rank[rankKey(b.title)];
+    if(ra == null) ra = 1e9;
+    if(rb == null) rb = 1e9;
+    return ra - rb;
+  });
+  return S.ordCat;
+}
+
+/* the supplier this product came from last time it was ordered — ignoring
+   any that has since left the list, so a dropped supplier cannot come back
+   in through the history */
+function lastSupplier(title){
+  var k = rankKey(title), hit = null;
+  (S.orders || []).forEach(function(o){
+    if(rankKey(o.title) === k && SUPPLIERS.indexOf(o.supplier) >= 0) hit = o.supplier;
+  });
+  return hit;
+}
+
+A.loadOrdCat = function(){
+  ordCat();
+  var have = {};
+  S.ordCat.forEach(function(x){ have[rankKey(x.title)] = 1; });
+  var n = 0;
+  Object.keys(ORDER_CATS).forEach(function(c){
+    ORDER_CATS[c].forEach(function(pn){
+      var k = rankKey(pn);
+      if(!k || have[k]) return;
+      have[k] = 1; n++;
+      S.ordCat.push({id:uid(), title:pn, cat:c, sup:lastSupplier(pn) || defSupplier(c), arch:false});
+    });
+  });
+  save(n ? n + " products loaded" : "The list is already complete");
+};
+
+A.ordArch = function(id){
+  ordCat();
+  for(var i=0;i<S.ordCat.length;i++){
+    if(S.ordCat[i].id === id){ S.ordCat[i].arch = !S.ordCat[i].arch; break; }
+  }
+  save();
+};
+
+A.ordSup = function(id, v){
+  ordCat();
+  for(var i=0;i<S.ordCat.length;i++){ if(S.ordCat[i].id === id){ S.ordCat[i].sup = v; break; } }
+};
+
+A.ordPut = function(id){
+  if(!me){ toast("Tell us who you are first"); return; }
+  ordCat();
+  var it = S.ordCat.filter(function(x){ return x.id === id; })[0];
+  if(!it) return;
+  var already = S.orders.some(function(o){
+    return !o.done && rankKey(o.title) === rankKey(it.title) && o.supplier === it.sup;
+  });
+  if(already){ toast(it.title + " is already on the pad"); return; }
+  var line = {id:uid(), title:it.title, qty:"", supplier:it.sup, urgent:false,
+              done:false, by:null, at:null, addedBy:me.id};
+  insertRanked(S.orders, line, catRank(), function(o){ return o.supplier === line.supplier; });
+  save(it.title + " added");
+};
+
+A.ordGroup = function(v){ ordGroup = (v === "cat" ? "cat" : "sup"); render(); };
+
+A.showOldOrd = function(){ showOldOrd = !showOldOrd; render(); };
+
+A.todo = function(id){
+  for(var i=0;i<S.prep.length;i++){
+    if(S.prep[i].id===id){
+      S.prep[i].todo = !S.prep[i].todo;
+      if(!S.prep[i].todo){ S.prep[i].done = false; S.prep[i].by = null; S.prep[i].at = null; }
+      break;
+    }
+  }
+  save();
+};
+
+A.todoClear = function(){
+  S.prep.forEach(function(x){ if(x.todo){ x.todo = false; x.done = false; x.by = null; x.at = null; } });
+  save("Today's sheet cleared");
+};
+
+/* ---- the sheet, on paper ------------------------------------------
+ * The brigade has written on this form for years: two columns, product,
+ * restriction, ADV, the protein count, the note, and a signature at the
+ * bottom. Printed from here it should sit in the pile with the old ones
+ * and not look like a different document.
+ *
+ * The browser's own print dialogue is the export: on the iPad it is
+ * Share -> Print -> pinch out to save as PDF, on a Mac it is the PDF
+ * button in the print sheet. No server, no library, works offline.
+ * ------------------------------------------------------------------ */
+/* Each register printed as its own paper form. The temperatures print as
+   the month grid the classeur holds; the logs print as their tables. */
+A.printHac = function(){
+  hacInit();
+  var t = HAC_TABS.filter(function(x){ return x.k === hacTab; })[0];
+  var month = String(DAY).slice(0, 7), days = [];
+  for(var i = 1; i <= 31; i++) days.push(i);
+  var pad = function(n){ return (n < 10 ? "0" : "") + n; };
+
+  var body = "";
+  if(hacTab === "temps"){
+    var cell = function(e, dnum, slot){
+      var d = month + "-" + pad(dnum), c = ((S.hac.temps[d] || {})[e.id] || {});
+      return esc(c[slot] || "");
+    };
+    body = ["am","pm"].map(function(slot){
+      return '<div class="pg-t">' + (slot === "am" ? "MATIN" : "SOIR") + '</div>'
+        + '<table class="pgrid"><thead><tr><th class="pg-n">Enceinte</th>'
+        + days.map(function(d){ return '<th>' + d + '</th>'; }).join("") + '</tr></thead><tbody>'
+        + S.hac.enc.map(function(e){
+            return '<tr><td class="pg-n">' + esc(e.name) + '</td>'
+              + days.map(function(d){ return '<td>' + cell(e, d, slot) + '</td>'; }).join("") + '</tr>';
+          }).join("")
+        + '</tbody></table>';
+    }).join("");
+    body += '<div class="pg-note"><b>Actions correctives en cas de dépassement :</b> '
+      + '1) Prendre la température à cœur d’un produit. '
+      + '2) Avertir le responsable qui décide des actions correctives. '
+      + '3) Enregistrer l’action menée sur la fiche de non-conformités.</div>';
+  } else if(hacTab === "nd"){
+    body = ND_ZONES.map(function(z){
+      return '<div class="pg-t">ZONE : ' + esc(z.fr) + '</div>'
+        + '<table class="pgrid"><thead><tr><th class="pg-n">Surfaces</th><th class="pg-f">Fréquence</th>'
+        + days.map(function(d){ return '<th>' + d + '</th>'; }).join("") + '</tr></thead><tbody>'
+        + z.surf.map(function(r){
+            return '<tr><td class="pg-n">' + esc(r[0]) + '</td><td class="pg-f">' + esc(FREQ[r[2]].fr) + '</td>'
+              + days.map(function(d){
+                  var day = month + "-" + pad(d);
+                  var hit = (S.hac.ndLog || []).some(function(x){ return x.k === ndKey(z.k, r[0]) && x.d === day; });
+                  return '<td>' + (hit ? "✕" : "") + '</td>';
+                }).join("") + '</tr>';
+          }).join("")
+        + '</tbody></table>';
+    }).join("");
+  } else {
+    var defs = {
+      cool:  [["Date", "d"], ["Produit", "product"], ["Entrée h", "inT"], ["T° cœur", "inC"],
+              ["Sortie h", "outT"], ["T° cœur", "outC"], ["Observations", "note"]],
+      recep: [["Date", "d"], ["Produit", "product"], ["Fournisseur", "supplier"], ["T°C", "temp"],
+              ["DLC", "dlc"], ["N° lot", "lot"], ["Visuel/Emb.", "visual"], ["Observations", "note"]],
+      defr:  [["Date", "d"], ["Nature du produit", "product"], ["Fournisseur", "supplier"], ["N° lot", "lot"],
+              ["DLC initiale", "dlcInit"], ["DLC J+2", "dlcJ2"], ["Destination", "dest"], ["Observations", "note"]],
+      nc:    [["Date", "d"], ["Fournisseur", "supplier"], ["N° facture", "invoice"],
+              ["Objet du litige", "objet"], ["Action corrective", "action"], ["Observations", "note"]]
+    }[hacTab];
+    var rows = S.hac[hacTab] || [];
+    body = '<table class="pgrid wide"><thead><tr>'
+      + defs.map(function(c){ return '<th>' + esc(c[0]) + '</th>'; }).join("") + '<th>Responsable</th></tr></thead><tbody>'
+      + (rows.length ? rows : [null, null, null, null, null, null, null, null]).map(function(r){
+          return '<tr>' + defs.map(function(c){
+              return '<td>' + (r ? esc(r[c[1]] || "") : "&nbsp;") + '</td>';
+            }).join("") + '<td>' + (r ? esc(nameOf(r.by)) : "") + '</td></tr>';
+        }).join("")
+      + '</tbody></table>';
+  }
+
+  var old = document.getElementById("printsheet");
+  if(old) old.parentNode.removeChild(old);
+  var el = document.createElement("div");
+  el.id = "printsheet";
+  el.innerHTML = '<div class="psheet-h"><div class="ps-brand">' + dia("psdia") + 'SHABOUR</div>'
+    + '<div class="ps-title">' + esc(t.fr.toUpperCase()) + '</div>'
+    + '<div class="ps-date">' + esc(prettyDate(DAY)) + '</div></div>'
+    + '<div class="pgwrap">' + body + '</div>'
+    + '<div class="ps-sign"><span>Responsable</span><span class="ps-line">'
+    + (me ? esc(me.name) : "") + '</span><span>Date</span><span class="ps-line">'
+    + esc(prettyDate(DAY)) + '</span></div>';
+  document.body.appendChild(el);
+  var clean = function(){ if(el.parentNode) el.parentNode.removeChild(el); };
+  window.addEventListener("afterprint", clean, {once:true});
+  setTimeout(function(){ window.print(); }, 60);
+};
+
+A.printPrep = function(){
+  var rows = S.prep.filter(function(x){ return x.todo && !x.arch; });
+  if(!rows.length){ toast("Nothing on today\u2019s sheet"); return; }
+
+  var old = document.getElementById("printsheet");
+  if(old) old.parentNode.removeChild(old);
+
+  /* two real columns, each with its own caption — the paper has the
+     headings twice, once over each half, and so does this. */
+  var half = Math.ceil(rows.length / 2);
+  var col = function(list){
+    return '<div class="ps-col">'
+      + '<div class="ps-head"><span class="ps-p">PRODUCT</span>'
+      + '<span class="ps-r">RESTRICTION</span><span class="ps-a">ADV</span></div>'
+      + list.map(function(it){
+          return '<div class="ps-row"><span class="ps-p">' + esc(it.title) + '</span>'
+            + '<span class="ps-r">' + esc(it.restr || "") + '</span>'
+            + '<span class="ps-a"><span class="ps-box' + (it.adv ? " on" : "") + '">'
+            + (it.adv ? "\u2715" : "") + '</span></span></div>';
+        }).join("")
+      + '</div>';
+  };
+
+  var box = '<div class="psheet-h">'
+    + '<div class="ps-brand">' + dia("psdia") + 'SHABOUR</div>'
+    + '<div class="ps-title">PREP LIST</div>'
+    + '<div class="ps-date">' + esc(prettyDate(DAY)) + '</div></div>'
+    + '<div class="ps-cols">' + col(rows.slice(0, half)) + col(rows.slice(half)) + '</div>';
+
+  box += '<div class="ps-boxes">'
+    + '<div class="ps-box2"><div class="ps-bt">PROTEIN</div>'
+    + (S.proteins.length
+        ? S.proteins.map(function(x){
+            return '<div class="ps-kv"><span>' + esc(x.name) + '</span><b>' + esc(x.count || "") + '</b></div>';
+          }).join("")
+        : '<div class="ps-kv"><span>&nbsp;</span><b></b></div>'
+          + '<div class="ps-kv"><span>&nbsp;</span><b></b></div>'
+          + '<div class="ps-kv"><span>&nbsp;</span><b></b></div>')
+    + '</div>'
+    + '<div class="ps-box2"><div class="ps-bt">NOTE</div>'
+    + (S.notes.length
+        ? S.notes.map(function(n){ return '<div class="ps-note">' + esc(n.text) + '</div>'; }).join("")
+        : '<div class="ps-note">&nbsp;</div><div class="ps-note">&nbsp;</div><div class="ps-note">&nbsp;</div>')
+    + '</div></div>';
+
+  box += '<div class="ps-sign"><span>Signed</span><span class="ps-line">'
+    + (me ? esc(me.name) : "") + '</span>'
+    + '<span>Date</span><span class="ps-line">' + esc(prettyDate(DAY)) + '</span></div>';
+
+  var el = document.createElement("div");
+  el.id = "printsheet";
+  el.innerHTML = box;
+  document.body.appendChild(el);
+
+  var clean = function(){ if(el.parentNode) el.parentNode.removeChild(el); };
+  if(window.matchMedia){
+    var mq = window.matchMedia("print");
+    var once = function(m){ if(!m.matches){ clean(); if(mq.removeListener) mq.removeListener(once); } };
+    if(mq.addListener) mq.addListener(once);
+  }
+  window.addEventListener("afterprint", clean, {once:true});
+  setTimeout(function(){ window.print(); }, 60);
+};
+
 A.arch = function(id){
   for(var i=0;i<S.prep.length;i++){ if(S.prep[i].id===id){ S.prep[i].arch = !S.prep[i].arch; break; } }
   save();
@@ -477,6 +853,8 @@ A.recArch = function(name){
 };
 
 A.rec = function(id){ openRec = (openRec === id ? null : id); render(); };
+A.srec = function(id){ srecLine = (srecLine === id ? null : id); render(); };
+A.srecUse = function(id, i){ srecPick[id] = +i; srecLine = id; render(); };
 A.clearq = function(){ rq = ""; render(); };
 
 
@@ -498,7 +876,8 @@ function buildShare(kind, key){
         + (key === "*" ? "   [" + o.supplier + "]" : "");
     });
   } else if(kind === "prep"){
-    var todo = S.prep.filter(function(p){ return !p.done; });
+    /* today's sheet, not the 136-line catalogue underneath it */
+    var todo = S.prep.filter(function(p){ return p.todo && !p.arch && !p.done; });
     title = "Prep left";
     lines = todo.map(function(p){
       return "- " + p.title + (p.restr ? "  (" + p.restr + ")" : "") + (p.adv ? "  [ADV]" : "");
@@ -513,16 +892,6 @@ function buildShare(kind, key){
       lines.push("*Note*");
       S.notes.forEach(function(n){ lines.push("- " + n.text); });
     }
-  } else if(kind === "waste"){
-    title = "Waste";
-    lines = S.waste.map(function(x){
-      return "- " + x.title + (x.qty ? "  " + x.qty : "") + (x.why ? "  - " + x.why : "");
-    });
-  } else if(kind === "transfers"){
-    title = "Transfers";
-    lines = S.transfers.map(function(x){
-      return "- " + x.title + (x.qty ? "  " + x.qty : "") + (x.when ? "  " + x.when : "");
-    });
   } else if(kind === "invoice"){
     var v = S.invoices.filter(function(x){ return x.id === key; })[0];
     if(v){
@@ -676,6 +1045,14 @@ A.grantOrder = function(id){
   })["catch"](function(){ toast("Could not save"); });
 };
 
+A.grantInvoice = function(id){
+  api("POST", "/api/users/" + id + "/invoice").then(function(r){
+    if(!r.ok){ toast((r.json && r.json.error) || "Could not save"); return; }
+    toast(r.json.invoice ? nameOf(id) + " can photograph invoices now"
+                         : nameOf(id) + " can no longer photograph invoices"); boot();
+  })["catch"](function(){ toast("Could not save"); });
+};
+
 A.clearAcc = function(id){
   api("DELETE", "/api/users/" + id + "/access").then(function(r){
     if(!r.ok){ toast((r.json && r.json.error) || "Could not save"); return; }
@@ -736,6 +1113,8 @@ function viewAccess(){
       + '<button class="btn sm" data-act="setPin" data-id="' + p.id + '">' + (ok ? 'New code' : 'Set') + '</button>'
       + '<button class="btn sm' + (canOrder(p) ? ' pri' : '') + '" data-act="grantOrder" data-id="' + p.id + '"'
       + (MGMT[p.id] ? ' disabled title="Management always can"' : '') + '>Orders</button>'
+      + '<button class="btn sm' + (canInvoice(p) ? ' pri' : '') + '" data-act="grantInvoice" data-id="' + p.id + '"'
+      + (MGMT[p.id] ? ' disabled title="Management always can"' : '') + '>Invoice</button>'
       + (ok ? '<button class="x" data-act="clearAcc" data-id="' + p.id + '" aria-label="Remove access">&times;</button>' : '')
       + '</div>';
   }).join("");
@@ -978,8 +1357,20 @@ function nearestProducts(text){
 
 function viewInvoices(){
   if(!isMgmt(me)){
-    return '<div class="gate"><div class="lock">⛔</div><h2>Management only</h2>'
-      + '<p>Invoices move what everything costs. Eyal, Valentin and Hajir.</p></div>';
+    if(canInvoice(me)){
+      return '<div class="sec"><div class="sec-h"><h2>Invoice</h2>'
+        + '<span class="sub">photograph it when it arrives</span></div>'
+        + '<div class="ban"><div class="bi">\ud83d\udcf7</div><div>'
+        + '<div class="bt">Take the picture, that is all</div>'
+        + '<div class="bd">Photograph the invoice when the delivery lands and send it. '
+        + 'It goes straight to Eyal, Valentin and Hajir \u2014 they read it and put the prices in. '
+        + 'You will not see it again here, and that is on purpose: what things cost is their business.</div>'
+        + '</div></div>'
+        + '<div class="card">' + uploadRow(null) + '</div></div>';
+    }
+    return '<div class="gate"><div class="lock">\u26d4</div><h2>Management only</h2>'
+      + '<p>Invoices move what everything costs. Eyal, Valentin and Hajir \u2014 '
+      + 'or ask one of them to switch it on for you.</p></div>';
   }
 
   var h = '<div class="sec"><div class="sec-h"><h2>Invoices</h2>'
@@ -1141,8 +1532,6 @@ var ICO = {
   orders:   '<path d="M3 5h2l2.4 10.4A2 2 0 0 0 9.3 17h7.5a2 2 0 0 0 2-1.6L20 8H6"/><circle cx="10" cy="20" r="1.3"/><circle cx="17" cy="20" r="1.3"/>',
   recipes:  '<path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H19v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 1 6.5 18H19v3H6.5"/>',
   clean:    '<path d="M8 3h8l1 6H7z"/><path d="M9 9v5a3 3 0 0 0 6 0V9"/><path d="M12 17v4"/>',
-  pertes:   '<path d="M4 7h16M9 7V4h6v3M6 7l1 13a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-13"/>',
-  transferts:'<path d="M4 8h13l-3-3M20 16H7l3 3"/>',
   haccp:    '<path d="M12 3l7 3v6c0 4.5-3 7.7-7 9-4-1.3-7-4.5-7-9V6z"/><path d="M9 12l2 2 4-4"/>',
   invoices: '<path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><path d="M9 7h6M9 11h6M9 15h3"/>',
   direction:'<path d="M12 3l2.6 5.6 6 .8-4.4 4.3 1.1 6-5.3-2.9L6.7 19.7l1.1-6L3.4 9.4l6-.8z"/>',
@@ -1157,10 +1546,17 @@ function ico(k){
  * book. Everything else is one tap away under More. */
 function primaryFor(p){
   if(isMgmt(p))   return ["service","prep","orders","invoices"];
-  if(canOrder(p)) return ["service","prep","orders","recipes"];
+  if(canOrder(p))   return ["service","prep","orders","recipes"];
+  if(canInvoice(p)) return ["service","prep","invoices","recipes"];
   return ["service","prep","recipes","clean"];
 }
 var moreOpen = false;
+
+/* the house mark, straight off the logo artwork */
+function dia(cls){
+  return '<svg class="' + (cls || "dia") + '" viewBox="0 0 146 146" aria-hidden="true">'
+    + '<path d="M106.52 39.46C91.41 24.36 73 0 73 0s-15.9 21.84-33.52 39.46C20.56 58.38.02 72.98.02 72.98s24.36 18.41 39.46 33.52C54.58 121.6 73 145.96 73 145.96s15.89-21.84 33.52-39.46C125.44 87.57 145.98 72.98 145.98 72.98s-24.36-18.42-39.46-33.52Z"/></svg>';
+}
 
 function icoCheck(){ return '<svg viewBox="0 0 24 24"><polyline points="4 12 10 18 20 6"></polyline></svg>'; }
 
@@ -1201,6 +1597,62 @@ function statHTML(label, val, items){
     + (p?'<div class="bar"><i style="width:'+p.pct+'%"></i></div>':'') + '</div>';
 }
 
+/* one recipe, opened where the cook is standing */
+function recBody(i){
+  var r = RECIPES[i];
+  return '<div class="rbody">'
+    + '<div class="rsub">' + esc(r.n) + '</div>'
+    + (r.i.length ? '<ul class="ring">'
+        + r.i.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join("") + '</ul>' : '')
+    + (r.m.length ? '<div class="rsub">Method</div><p class="rmeth">'
+        + r.m.map(esc).join(" ") + '</p>' : '')
+    + (!r.i.length && !r.m.length
+        ? '<p class="rmeth">The book has the name but nothing written under it yet.</p>' : '')
+    + '</div>';
+}
+
+/* a line of today's sheet as it reads on the welcome screen: tick it off,
+   and open what it is made of without leaving the screen */
+function svcPrepRow(it){
+  var open  = srecLine === it.id;
+  var exact = recFor(it.title);
+  var pick  = srecPick[it.id];
+  var show  = (pick == null ? exact : pick);
+  var near  = exact >= 0 ? [] : recNear(it.title, 3);
+  var has   = exact >= 0 || near.length > 0;
+
+  var h = '<div class="srow">'
+    + '<div class="crow' + (it.done ? ' done' : '') + '">'
+    + '<button class="tick" data-act="toggle" data-kind="prep" data-id="' + it.id + '" '
+    + 'aria-pressed="' + (!!it.done) + '" aria-label="' + esc(it.title) + ' done">' + icoCheck() + '</button>'
+    + '<span class="cname">' + esc(it.title) + '</span>'
+    + '<span class="cctl">'
+    + (it.restr ? '<span class="chip">' + esc(it.restr) + '</span>' : '')
+    + (it.adv ? '<span class="chip ac">ADV</span>' : '')
+    + (has
+        ? '<button class="btn sm' + (open ? ' pri' : '') + '" data-act="srec" data-id="' + it.id + '" '
+          + 'aria-expanded="' + open + '">' + (open ? '\u2212' : '\u2261') + ' Recipe</button>'
+        : '')
+    + '</span></div>';
+
+  if(open){
+    if(show >= 0) h += recBody(show);
+    if(exact < 0 && near.length){
+      h += '<div class="rpick"><span class="rpt">'
+        + (show >= 0
+            ? 'Not the one you meant?'
+            : 'Nothing in the book under this name. The closest are:')
+        + '</span>'
+        + near.map(function(i){
+            return '<button class="btn sm' + (i === show ? ' pri' : '') + '" data-act="srecUse" '
+              + 'data-id="' + it.id + '" data-i="' + i + '">' + esc(RECIPES[i].n) + '</button>';
+          }).join("")
+        + '</div>';
+    }
+  }
+  return h + '</div>';
+}
+
 function viewService(){
   var team = onToday();
   var on = team.filter(function(x){ return x.p.always || (x.s && x.s[0]!=="Leave"); });
@@ -1230,10 +1682,45 @@ function viewService(){
 
   h += '<div class="stat">'
     + statHTML("On today", on.length, null)
-    + statHTML("Prep", progress(S.prep).done+"/"+progress(S.prep).total, S.prep)
+    + (function(){ var t = S.prep.filter(function(x){ return x.todo && !x.arch; });
+        return statHTML("Prep", progress(t).done+"/"+progress(t).total, t); })()
     + statHTML("Cleaning", progress(S.clean).done+"/"+progress(S.clean).total, S.clean)
-    + statHTML("HACCP", progress(S.haccp).done+"/"+progress(S.haccp).total, S.haccp)
+    + (function(){
+        hacInit();
+        var day = S.hac.temps[DAY] || {}, tot = 0, done = 0;
+        S.hac.enc.forEach(function(e){
+          var c = day[e.id] || {};
+          tot += 2; if(c.am) done++; if(c.pm) done++;
+        });
+        ND_ZONES.forEach(function(z){ z.surf.forEach(function(r){
+          if(r[2] === "u") return;
+          if(!ndDue(z.k, r[0], r[2])){ tot++; done++; return; }
+          tot++; var l = ndLast(z.k, r[0]); if(l && l.d === DAY) done++;
+        }); });
+        var fake = []; for(var i=0;i<tot;i++) fake.push({done: i < done});
+        return statHTML("HACCP", done + "/" + tot, fake);
+      })()
     + '</div>';
+
+  /* What the shift is actually for. It sits above the brigade because at
+     7am the question is what is left to make, not who is in. Finished
+     lines sink to the bottom, keeping the sheet's order among themselves. */
+  var svcTodo = S.prep.filter(function(x){ return x.todo && !x.arch; });
+  var svcDone = svcTodo.filter(function(x){ return x.done; }).length;
+  var svcSort = svcTodo.slice().sort(function(a, b){ return (a.done ? 1 : 0) - (b.done ? 1 : 0); });
+
+  h += '<div class="sec"><div class="sec-h"><h2>To do today</h2>'
+    + '<span class="sub">' + svcDone + ' / ' + svcTodo.length + ' done</span>'
+    + '<span class="act"><button class="btn sm" data-act="tab" data-tab="prep">The whole sheet</button></span></div>';
+  if(!svcTodo.length){
+    h += '<div class="card"><div class="empty">Nothing on today\u2019s sheet yet.<br><br>'
+      + '<button class="btn pri" data-act="tab" data-tab="prep">Open the prep list</button></div>'
+      + prepForm("todo") + '</div>';
+  } else {
+    h += '<div class="card">' + svcSort.map(svcPrepRow).join("")
+      + prepForm("todo") + '</div>';
+  }
+  h += '</div>';
 
   h += '<div class="sec"><div class="sec-h"><h2>The brigade</h2><span class="sub">'+esc(prettyDate(DAY))+'</span>'
     + '<span class="act">' + extLink(COMBO+WEEK, "Combo", "sm") + '</span></div>'
@@ -1262,16 +1749,41 @@ function viewPrep(){
   var d = live.filter(function(x){ return x.done; }).length;
   var advN = live.filter(function(x){ return x.adv; }).length;
 
-  var h = '<div class="sec"><div class="sec-h"><h2>On the menu</h2>'
-    + '<span class="sub">' + d + ' / ' + live.length + ' done &middot; ' + advN + ' ADV</span>'
-    + '<span class="act">' + shareBtn("prep") + '<button class="btn sm" data-act="loadPrep">Load the list</button></span></div>';
+  var todo = live.filter(function(x){ return x.todo; });
+  var td   = todo.filter(function(x){ return x.done; }).length;
+  var tadv = todo.filter(function(x){ return x.adv; }).length;
 
-  if(!live.length){
-    h += '<div class="card"><div class="empty">Nothing on the menu.<br><br>'
-      + '<button class="btn pri" data-act="loadPrep">Load the list (' + PREP_LIST_get().length + ' lines)</button></div></div>';
+  /* --- today's sheet: only what somebody put on it --- */
+  var h = '<div class="sec"><div class="sec-h"><h2>To do today</h2>'
+    + '<span class="sub">' + td + ' / ' + todo.length + ' done &middot; ' + tadv + ' ADV</span>'
+    + '<span class="act">'
+    + (todo.length ? '<button class="btn sm" data-act="printPrep">Print / PDF</button>' : '')
+    + shareBtn("prep")
+    + (todo.length ? '<button class="btn sm" data-act="todoClear">Clear</button>' : '')
+    + '</span></div>';
+
+  if(!todo.length){
+    h += '<div class="card"><div class="empty">Nothing on today\u2019s sheet yet.<br><br>'
+      + 'Press <b>+</b> next to a product in the list below to put it on.</div></div>';
   } else {
     h += '<div class="card">' + sheetHead()
-      + '<div class="sheetgrid">' + live.map(prepRow).join("") + '</div>' + prepForm() + '</div>';
+      + '<div class="sheetgrid">' + todo.map(function(x){ return prepRow(x, "todo"); }).join("") + '</div>'
+      + prepForm("todo") + '</div>';
+  }
+  h += '</div>';
+
+  /* --- the catalogue underneath: everything the kitchen makes --- */
+  h += '<div class="sec"><div class="sec-h"><h2>The list</h2>'
+    + '<span class="sub">' + live.length + ' products &middot; ' + advN + ' ADV</span>'
+    + '<span class="act"><button class="btn sm" data-act="loadPrep">Load the list</button></span></div>';
+
+  if(!live.length){
+    h += '<div class="card"><div class="empty">The list is empty.<br><br>'
+      + '<button class="btn pri" data-act="loadPrep">Load the list (' + PREP_LIST_get().length + ' lines)</button></div></div>';
+  } else {
+    h += '<div class="card"><div class="catgrid">'
+      + live.map(function(x){ return prepRow(x, "cat"); }).join("")
+      + '</div>' + prepForm("cat") + '</div>';
   }
   h += '</div>';
 
@@ -1280,8 +1792,12 @@ function viewPrep(){
     + '<span class="sub">' + old.length + ' put aside</span></div>';
   if(showOld){
     h += old.length
-      ? '<div class="card">' + sheetHead() + '<div class="sheetgrid">' + old.map(prepRow).join("") + '</div></div>'
-      : '<div class="card"><div class="empty">Nothing archived.</div></div>';
+      ? '<div class="card"><div class="catgrid">' + old.map(function(x){
+            return '<div class="crow"><button class="plus" data-act="arch" data-id="' + x.id + '" '
+              + 'aria-label="Put back on the list">\u21ba</button>'
+              + '<span class="cname">' + esc(x.title) + '</span></div>';
+          }).join("") + '</div></div>'
+      : '<div class="card"><div class="empty">Nothing put aside.</div></div>';
   }
   h += '</div>';
 
@@ -1313,7 +1829,22 @@ function sheetHead(){
   return '<div class="sheet-hd">' + one + one + '</div>';   /* second shows only two-up */
 }
 
-function prepRow(it){
+/* mode "cat" is the catalogue underneath: name, and a + to put it on the
+   sheet. mode "todo" is today's sheet: the tick, the restriction, the ADV
+   box — the paper sheet, in other words. */
+function prepRow(it, mode){
+  if(mode === "cat"){
+    return '<div class="crow' + (it.todo ? ' on' : '') + '">'
+      + '<button class="plus" data-act="todo" data-id="' + it.id + '" aria-pressed="' + (!!it.todo) + '" '
+      + 'aria-label="' + (it.todo ? 'Take off today\u2019s sheet' : 'Put on today\u2019s sheet') + '">'
+      + (it.todo ? '\u2212' : '+') + '</button>'
+      + '<span class="cname">' + esc(it.title) + '</span>'
+      + '<span class="cctl">'
+      + (it.todo ? '<span class="chip ac">on the sheet</span>' : '')
+      + '<button class="x" data-act="arch" data-id="' + it.id + '" '
+      + 'title="Move to Old" aria-label="Move ' + esc(it.title) + ' to Old">\u2193</button>'
+      + '</span></div>';
+  }
   return '<div class="prow' + (it.done ? ' done' : '') + '">'
     + '<button class="tick" data-act="toggle" data-kind="prep" data-id="' + it.id + '" aria-pressed="' + (!!it.done) + '" aria-label="Done">' + icoCheck() + '</button>'
     + '<span class="pname">' + esc(it.title) + '</span>'
@@ -1324,51 +1855,17 @@ function prepRow(it){
     + '</div>';
 }
 
-function prepForm(){
+/* Both places this form appears carried the same element id, so the second
+   one read the first one's box and quietly did nothing. Each gets its own
+   field now — and the one on today's sheet puts the line on today's sheet,
+   which is what you mean when you type it there. */
+function prepForm(where){
+  var w = where || "cat";
   return '<div class="add">'
-    + '<input id="prep-t" class="w" placeholder="Add a line" data-enter="addPrep">'
-    + '<button class="btn pri" data-act="addPrep">Add</button></div>';
-}
-
-function viewWaste(){
-  var h = '<div class="sec"><div class="sec-h"><h2>Waste</h2>'
-    + '<span class="sub">' + S.waste.length + ' line' + (S.waste.length === 1 ? '' : 's') + '</span>'
-    + '<span class="act">' + shareBtn("waste") + '</span></div><div class="card">'
-    + '<div class="sheet-h"><span class="sh-p">product</span><span class="sh-r">amount</span><span class="sh-a2">why</span></div>';
-  h += (S.waste.length ? S.waste.map(function(x){
-      return '<div class="prow">'
-        + '<span class="pname" style="padding-left:12px">' + esc(x.title) + '</span>'
-        + '<span class="pqty">' + esc(x.qty || "—") + '</span>'
-        + '<span class="pwhy">' + esc(x.why || "—") + '</span>'
-        + '<span class="chip">' + esc(nameOf(x.by)) + '</span>'
-        + '<button class="x" data-act="remove" data-kind="waste" data-id="' + x.id + '" aria-label="Remove">&times;</button></div>';
-    }).join("") : '<div class="empty">Nothing thrown. Good day.</div>');
-  h += '<div class="add"><input id="w-p" class="w" list="cat" placeholder="Product" data-enter="addWaste">'
-    + catalogueHTML()
-    + '<input id="w-a" placeholder="Amount" style="flex:0 0 80px" data-enter="addWaste">'
-    + '<input id="w-w" class="w" placeholder="Why — use-by, breakage, mistake…" data-enter="addWaste">'
-    + '<button class="btn pri" data-act="addWaste">Add</button></div></div></div>';
-  return h;
-}
-
-function viewTransfers(){
-  var h = '<div class="sec"><div class="sec-h"><h2>Transfers</h2>'
-    + '<span class="sub">' + S.transfers.length + ' line' + (S.transfers.length === 1 ? '' : 's') + '</span>'
-    + '<span class="act">' + shareBtn("transfers") + '</span></div><div class="card">'
-    + '<div class="sheet-h"><span class="sh-p">product</span><span class="sh-r">amount</span><span class="sh-a2">date</span></div>';
-  h += (S.transfers.length ? S.transfers.map(function(x){
-      return '<div class="prow">'
-        + '<span class="pname" style="padding-left:12px">' + esc(x.title) + '</span>'
-        + '<span class="pqty">' + esc(x.qty || "—") + '</span>'
-        + '<span class="pwhy">' + esc(x.when || "—") + '</span>'
-        + '<span class="chip">' + esc(nameOf(x.by)) + '</span>'
-        + '<button class="x" data-act="remove" data-kind="transfers" data-id="' + x.id + '" aria-label="Remove">&times;</button></div>';
-    }).join("") : '<div class="empty">No transfers logged.</div>');
-  h += '<div class="add"><input id="t-p" class="w" list="cat" placeholder="Product" data-enter="addTransfer">'
-    + '<input id="t-a" placeholder="Amount" style="flex:0 0 80px" data-enter="addTransfer">'
-    + '<input id="t-d" placeholder="Date" style="flex:0 0 110px" data-enter="addTransfer">'
-    + '<button class="btn pri" data-act="addTransfer">Add</button></div></div></div>';
-  return h;
+    + '<input id="prep-t-' + w + '" class="w" placeholder="'
+    + (w === "cat" ? 'Add a product to the list' : 'Add a line to today\u2019s sheet')
+    + '" data-enter="addPrep" data-where="' + w + '">'
+    + '<button class="btn pri" data-act="addPrep" data-where="' + w + '">Add</button></div>';
 }
 
 function catalogueHTML(){
@@ -1381,6 +1878,35 @@ function catalogueHTML(){
     });
   });
   return '<datalist id="cat">' + opts.join("") + '</datalist>';
+}
+
+function ordHead(name, n){
+  return '<div class="sec-h" style="margin-top:14px">'
+    + '<h2 style="font-size:12px;text-transform:uppercase;letter-spacing:.08em">' + esc(name) + '</h2>'
+    + '<span class="sub">' + n + '</span></div>';
+}
+
+function ordRow(it, mode, group){
+  if(mode === "old"){
+    return '<div class="crow"><button class="plus" data-act="ordArch" data-id="' + it.id + '" '
+      + 'aria-label="Put back on the list">\u21ba</button>'
+      + '<span class="cname">' + esc(it.title) + '</span>'
+      + '<span class="chip">' + esc(catLabel(it.cat)) + '</span>'
+      + '<span class="chip">' + esc(it.sup || "") + '</span></div>';
+  }
+  return '<div class="crow ord">'
+    + '<button class="plus" data-act="ordPut" data-id="' + it.id + '" '
+    + 'aria-label="Add ' + esc(it.title) + ' to the pad">+</button>'
+    + '<span class="cname">' + esc(it.title) + '</span>'
+    + '<span class="cctl">'
+    + '<select class="osup" data-osup="' + it.id + '" aria-label="Supplier for ' + esc(it.title) + '">'
+    + SUPPLIERS.map(function(x){
+        return '<option' + (x === it.sup ? ' selected' : '') + '>' + esc(x) + '</option>';
+      }).join("")
+    + '</select>'
+    + '<button class="x" data-act="ordArch" data-id="' + it.id + '" '
+    + 'title="Move to Old" aria-label="Move ' + esc(it.title) + ' to Old">\u2193</button>'
+    + '</span></div>';
 }
 
 function viewOrders(){
@@ -1423,7 +1949,81 @@ function viewOrders(){
     h += '<div class="sec-h" style="margin-top:18px"><h2 style="font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink3)">Ordered</h2></div>'
       + listCard("orders", done, "");
   }
-  return h + '</div>';
+  h += '</div>';
+
+  /* --- the list: what this kitchen actually buys --- */
+  var cat = ordCat();
+  var liveC = cat.filter(function(x){ return !x.arch; });
+  var oldC  = cat.filter(function(x){ return x.arch; });
+
+  h += '<div class="sec"><div class="sec-h"><h2>The list</h2>'
+    + '<span class="sub">' + liveC.length + ' products</span>'
+    + '<span class="act"><button class="btn sm" data-act="loadOrdCat">Load the list</button></span></div>'
+    + '<div class="card"><div class="add" style="border-top:0">'
+    + '<button class="btn sm' + (ordGroup === "sup" ? ' pri' : '') + '" data-act="ordGroup" data-v="sup">By supplier</button>'
+    + '<button class="btn sm' + (ordGroup === "cat" ? ' pri' : '') + '" data-act="ordGroup" data-v="cat">By family</button>'
+    + '</div></div>';
+
+  if(!liveC.length){
+    h += '<div class="card"><div class="empty">The list is empty.<br><br>'
+      + '<button class="btn pri" data-act="loadOrdCat">Load the list from the order sheet</button></div></div>';
+  } else if(ordGroup === "cat"){
+    /* by family: the order of the printed sheet, VEG through DRY */
+    var byCat = {}, cats = [];
+    liveC.forEach(function(x){
+      var c = x.cat || "Other";
+      if(!byCat[c]){ byCat[c] = []; cats.push(c); }
+      byCat[c].push(x);
+    });
+    cats.sort(function(a,b){ return catPos(a) - catPos(b); });
+    h += cats.map(function(c){
+      return ordHead(catLabel(c), byCat[c].length)
+        + '<div class="card"><div class="catgrid">'
+        + byCat[c].map(function(x){ return ordRow(x, "live", "cat"); }).join("") + '</div></div>';
+    }).join("");
+  } else {
+    /* by supplier: the order the phone calls go out in, and inside each
+       supplier the families again, so a call runs down the paper sheet */
+    var bySupC = {}, supsC = [];
+    liveC.forEach(function(x){
+      var s2 = x.sup || SUPPLIERS[0];
+      if(!bySupC[s2]){ bySupC[s2] = []; supsC.push(s2); }
+      bySupC[s2].push(x);
+    });
+    supsC.sort(function(a,b){
+      var ia = SUPPLIERS.indexOf(a), ib = SUPPLIERS.indexOf(b);
+      return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+    });
+    h += supsC.map(function(s2){
+      var rows = bySupC[s2].slice().sort(function(a,b){ return catPos(a.cat) - catPos(b.cat); });
+      var out = ordHead(s2, rows.length), run = null, buf = [];
+      var flush = function(){
+        if(!buf.length) return;
+        out += '<div class="card"><div class="csub">' + esc(catLabel(run)) + '</div>'
+             + '<div class="catgrid">' + buf.join("") + '</div></div>';
+        buf = [];
+      };
+      rows.forEach(function(x){
+        var c = x.cat || "Other";
+        if(c !== run){ flush(); run = c; }
+        buf.push(ordRow(x, "live", "sup"));
+      });
+      flush();
+      return out;
+    }).join("");
+  }
+  h += '</div>';
+
+  h += '<div class="sec"><div class="sec-h">'
+    + '<button class="btn sm" data-act="showOldOrd">' + (showOldOrd ? '\u2212' : '+') + ' Old products</button>'
+    + '<span class="sub">' + oldC.length + ' put aside</span></div>';
+  if(showOldOrd){
+    h += oldC.length
+      ? '<div class="card"><div class="catgrid">' + oldC.map(function(x){ return ordRow(x, "old"); }).join("") + '</div></div>'
+      : '<div class="card"><div class="empty">Nothing put aside.</div></div>';
+  }
+  h += '</div>';
+  return h;
 }
 
 function viewRecipes(){
@@ -1497,23 +2097,385 @@ function viewClean(){
   return h + '</div>';
 }
 
-function viewHaccp(){
-  if(!S.haccp.length){
-    return '<div class="sec"><div class="sec-h"><h2>HACCP</h2></div>'
-      + '<div class="card"><div class="empty">The HACCP round is not open.<br><br>'
-      + '<button class="btn pri" data-act="newDay">Open service</button></div></div></div>';
-  }
-  var p = progress(S.haccp);
-  var h = '<div class="sec"><div class="sec-h"><h2>HACCP round</h2><span class="sub">'+p.done+' / '+p.total+'</span>'
-    + '<span class="act">' + shareBtn("haccp") + '</span></div>'
-    + '<div class="ban q"><div class="bi">🌡️</div><div><div class="bd">Service readings. What you type here is an reminder — the official register stays in Melba, Hygiene &amp; Traceability.</div></div></div>';
-  h += listCard("haccp", S.haccp, "", function(it){
-    if(it.kind !== "temp") return "";
-    return '<input class="tempin" aria-label="Temperature reading" value="'+esc(it.value||"")+'" placeholder="°C" data-val="'+it.id+'">';
-  });
-  return h + '</div>';
+/* ====================================================================
+ * HACCP — the classeur, as six registers
+ *
+ * Not one checklist. The kitchen's own Classeur des Autocontrôles is six
+ * different forms and only two of them are tick-a-box shaped: a month
+ * grid of temperatures per enceinte, two cleaning grids whose lines each
+ * carry their own frequency, and four event logs. Every label carries the
+ * French of the paper first — that is what an inspector reads and what
+ * the brigade recognises — with the English underneath.
+ * ================================================================== */
+
+var HAC_TABS = [
+  {k:"temps", fr:"Températures positives",  en:"Fridge temperatures"},
+  {k:"nd",    fr:"Nettoyage-Désinfection",  en:"Cleaning & disinfection"},
+  {k:"cool",  fr:"Refroidissement rapide",  en:"Blast chilling"},
+  {k:"recep", fr:"Contrôle à réception",    en:"Deliveries in"},
+  {k:"defr",  fr:"Décongélation",           en:"Defrosting"},
+  {k:"nc",    fr:"Non-conformités",         en:"Supplier returns"}
+];
+var hacTab = "temps";
+
+/* the enceintes named on the kitchen's own ND sheet */
+var HAC_ENC_DEFAULT = [
+  {id:"cf1", name:"Chambre froide positive 1"},
+  {id:"cf2", name:"Chambre froide positive 2"},
+  {id:"fpo", name:"Frigos positifs"},
+  {id:"fng", name:"Frigo négatif", neg:true},
+  {id:"arp", name:"Armoire T°C positive — économat"},
+  {id:"arn", name:"Armoire T°C négative — économat", neg:true}
+];
+
+/* Fréquence: how often the paper says each surface is done. An item is
+   only "à faire" once its own window has run out — otherwise the plafond
+   reads as undone every day of the year and the round means nothing. */
+var FREQ = {
+  j:    {fr:"1 fois/jour",         en:"daily",            days:1},
+  soir: {fr:"tous les soirs",      en:"every evening",    days:1},
+  s:    {fr:"1 fois/semaine",      en:"weekly",           days:7},
+  u:    {fr:"après chaque usage",  en:"after each use",   days:0},
+  a4:   {fr:"4 fois/an",           en:"4× a year",        days:90},
+  a2:   {fr:"2 fois/an",           en:"twice a year",     days:182}
+};
+
+var ND_ZONES = [
+  {k:"cuisine", fr:"Cuisine", en:"Kitchen", surf:[
+    ["Sol","Floor","j"],["Mur","Walls","s"],["Plafond","Ceiling","a2"],
+    ["Lavabo et plonge","Sink and washing-up","j"],
+    ["Poste de lavage mains","Hand-wash station","j"],
+    ["Frigos","Fridges","j"],["Plonge vaisselle","Dishwash","j"],
+    ["Plan de travail","Work surfaces","u"],["Étagères","Shelves","u"],
+    ["Appareils de cuisson","Cooking equipment","j"],["Four","Oven","j"],
+    ["Poubelles","Bins","j"],["Hotte et filtres","Hood and filters","a4"],
+    ["Contrôle et suivi","Check and sign off","soir"]
+  ]},
+  {k:"livraison", fr:"Livraison et économat", en:"Delivery and dry store", surf:[
+    ["Sol","Floor","j"],["Mur","Walls","s"],["Plafond","Ceiling","a2"],
+    ["Lavabos légumerie","Veg-prep sinks","j"],
+    ["Poste de lavage des mains","Hand-wash station","j"],
+    ["Plan de travail","Work surfaces","j"],["Poubelles","Bins","j"],
+    ["Armoire à T°C positive","Positive cabinet","s"],
+    ["Armoire à T°C négative","Negative cabinet","s"],
+    ["Machine à glace","Ice machine","s"],["Machine à jus","Juicer","s"],
+    ["Contrôle et suivi","Check and sign off","soir"]
+  ]}
+];
+
+function hacInit(){
+  S.hac = S.hac || {};
+  if(!S.hac.enc || !S.hac.enc.length) S.hac.enc = HAC_ENC_DEFAULT.slice();
+  S.hac.temps = S.hac.temps || {};
+  S.hac.ndLog = S.hac.ndLog || [];
+  S.hac.cool  = S.hac.cool  || [];
+  S.hac.recep = S.hac.recep || [];
+  S.hac.defr  = S.hac.defr  || [];
+  S.hac.nc    = S.hac.nc    || [];
+  if(S.hac.target == null) S.hac.target = 4;
+  return S.hac;
 }
 
+function bi(fr, en){ return '<span class="bl"><b>' + esc(fr) + '</b><i>' + esc(en) + '</i></span>'; }
+
+function dayOffset(d, n){
+  var p = String(d).split("-");
+  var t = new Date(+p[0], +p[1]-1, +p[2]);
+  t.setDate(t.getDate() + n);
+  var m = t.getMonth()+1, dd = t.getDate();
+  return t.getFullYear() + "-" + (m<10?"0":"") + m + "-" + (dd<10?"0":"") + dd;
+}
+function daysBetween(a, b){
+  var pa = String(a).split("-"), pb = String(b).split("-");
+  var x = new Date(+pa[0], +pa[1]-1, +pa[2]), y = new Date(+pb[0], +pb[1]-1, +pb[2]);
+  return Math.round((y - x) / 86400000);
+}
+
+function frDate(d){
+  var p = String(d).split("-");
+  return p.length === 3 ? p[2] + "/" + p[1] : String(d);
+}
+
+function ndKey(z, i){ return z + "::" + i; }
+function ndLast(z, i){
+  var k = ndKey(z, i), best = null;
+  (S.hac.ndLog || []).forEach(function(e){ if(e.k === k && (!best || e.d > best.d)) best = e; });
+  return best;
+}
+/* due today? "après chaque usage" is never overdue — it is a habit, not a date */
+function ndDue(z, i, freq){
+  if(freq === "u") return false;
+  var last = ndLast(z, i);
+  if(!last) return true;
+  return daysBetween(last.d, DAY) >= (FREQ[freq] ? FREQ[freq].days : 1);
+}
+
+/* ---- actions ---- */
+A.hacTab = function(k){ hacTab = k; render(); };
+
+A.hacTemp = function(encId, slot, v){
+  hacInit();
+  var day = S.hac.temps[DAY] = S.hac.temps[DAY] || {};
+  var cell = day[encId] = day[encId] || {};
+  cell[slot] = String(v == null ? "" : v).trim();
+  cell[slot + "By"] = me ? me.id : null;
+};
+
+A.hacNd = function(z, i){
+  if(!me){ toast("Tell us who you are first"); return; }
+  hacInit();
+  var k = ndKey(z, i);
+  var today = (S.hac.ndLog || []).filter(function(e){ return e.k === k && e.d === DAY; });
+  if(today.length){
+    S.hac.ndLog = S.hac.ndLog.filter(function(e){ return !(e.k === k && e.d === DAY); });
+  } else {
+    S.hac.ndLog.push({id:uid(), k:k, d:DAY, by:me.id, at:Date.now()});
+    if(S.hac.ndLog.length > 600) S.hac.ndLog = S.hac.ndLog.slice(-600);
+  }
+  save();
+};
+
+A.hacAdd = function(which){
+  if(!me){ toast("Tell us who you are first"); return; }
+  hacInit();
+  var g = function(id){ var e = document.getElementById(id); return e ? e.value.trim() : ""; };
+  var clear = function(ids){ ids.forEach(function(id){ var e = document.getElementById(id); if(e) e.value = ""; }); };
+  var row = {id:uid(), d:DAY, by:me.id, at:Date.now()};
+
+  if(which === "cool"){
+    if(!g("hc-p")){ toast("Quel produit ? / Which product?"); return; }
+    row.product = g("hc-p"); row.inT = g("hc-it"); row.inC = g("hc-ic");
+    row.outT = g("hc-ot"); row.outC = g("hc-oc"); row.note = g("hc-n");
+    S.hac.cool.unshift(row); clear(["hc-p","hc-it","hc-ic","hc-ot","hc-oc","hc-n"]);
+  } else if(which === "recep"){
+    if(!g("hr-p")){ toast("Quel produit ? / Which product?"); return; }
+    row.product = g("hr-p"); row.supplier = g("hr-s"); row.temp = g("hr-t");
+    row.dlc = g("hr-d"); row.lot = g("hr-l"); row.visual = g("hr-q"); row.note = g("hr-n");
+    S.hac.recep.unshift(row); clear(["hr-p","hr-t","hr-d","hr-l","hr-q","hr-n"]);
+  } else if(which === "defr"){
+    if(!g("hd-p")){ toast("Quel produit ? / Which product?"); return; }
+    row.product = g("hd-p"); row.supplier = g("hd-s"); row.lot = g("hd-l");
+    row.dlcInit = g("hd-di"); row.dest = g("hd-dest"); row.note = g("hd-n");
+    row.dlcJ2 = dayOffset(DAY, 2);          /* the form's own rule: DLC J+2 */
+    S.hac.defr.unshift(row); clear(["hd-p","hd-l","hd-di","hd-dest","hd-n"]);
+  } else if(which === "nc"){
+    if(!g("hn-s")){ toast("Quel fournisseur ? / Which supplier?"); return; }
+    row.supplier = g("hn-s"); row.invoice = g("hn-i"); row.objet = g("hn-o");
+    row.action = g("hn-a"); row.note = g("hn-n");
+    S.hac.nc.unshift(row); clear(["hn-i","hn-o","hn-n"]);
+  }
+  save("Enregistré / Recorded");
+};
+
+A.hacRm = function(which, id){
+  hacInit();
+  S.hac[which] = (S.hac[which] || []).filter(function(x){ return x.id !== id; });
+  save("Ligne retirée / Line removed");
+};
+
+/* ---- the six views ---- */
+
+function hacNav(){
+  return '<div class="hacnav">' + HAC_TABS.map(function(t){
+    return '<button class="hbtn' + (hacTab === t.k ? ' on' : '') + '" data-act="hacTab" data-k="' + t.k + '">'
+      + '<b>' + esc(t.fr) + '</b><i>' + esc(t.en) + '</i></button>';
+  }).join("") + '</div>';
+}
+
+function hacHead(t, extra){
+  return '<div class="sec-h"><h2>' + esc(t.fr) + '</h2><span class="sub">' + esc(t.en) + '</span>'
+    + '<span class="act">' + (extra || '')
+    + '<button class="btn sm" data-act="printHac">Imprimer / PDF</button></span></div>';
+}
+
+function viewHacTemps(){
+  var t = HAC_TABS[0], day = (S.hac.temps[DAY] || {});
+  var over = [];
+  var h = hacHead(t) + '<div class="card">'
+    + '<div class="hhead"><span class="hh-n">Enceinte</span>'
+    + '<span class="hh-c">Matin<i>AM</i></span><span class="hh-c">Soir<i>PM</i></span></div>';
+  h += S.hac.enc.map(function(e){
+    var c = day[e.id] || {};
+    /* a positive enceinte is out of range above +4; a negative one above
+       -18. Reading a negative box against the positive target would flag
+       every correct reading it ever takes. */
+    var limit = e.neg ? -18 : S.hac.target;
+    var hot = function(v){
+      var n = parseFloat(String(v).replace(",", "."));
+      return isFinite(n) && n > limit;
+    };
+    if(hot(c.am) || hot(c.pm)) over.push(e.name);
+    return '<div class="hrow">'
+      + '<span class="hname">' + esc(e.name) + '</span>'
+      + '<span class="hcell"><i>Matin</i>'
+      + '<input class="tempin' + (hot(c.am) ? ' bad' : '') + '" id="tp-' + e.id + '-am" inputmode="decimal" placeholder="°C" '
+      + 'aria-label="' + esc(e.name) + ' matin" value="' + esc(c.am || "") + '" data-temp="' + e.id + '" data-slot="am"></span>'
+      + '<span class="hcell"><i>Soir</i>'
+      + '<input class="tempin' + (hot(c.pm) ? ' bad' : '') + '" id="tp-' + e.id + '-pm" inputmode="decimal" placeholder="°C" '
+      + 'aria-label="' + esc(e.name) + ' soir" value="' + esc(c.pm || "") + '" data-temp="' + e.id + '" data-slot="pm"></span>'
+      + '</div>';
+  }).join("") + '</div>';
+
+  if(over.length){
+    h += '<div class="ban wa" style="margin-top:14px"><div class="bi">⚠️</div><div>'
+      + '<div class="bt">Dépassement — ' + esc(over.join(", ")) + '</div>'
+      + '<div class="bd">Les actions correctives, dans l’ordre de la fiche :<br>'
+      + '<b>1.</b> Prendre la température à cœur d’un produit.<br>'
+      + '<b>2.</b> Avertir le responsable, qui décide des actions correctives.<br>'
+      + '<b>3.</b> Enregistrer l’action menée dans <b>Non-conformités</b>.'
+      + '<br><br><i>Out of range \u2014 above +' + S.hac.target + '\u00b0C, or above \u221218\u00b0C for a negative box. '
+      + 'Core-temp a product, tell the chef, then log what was done '
+      + 'under Non-conformités.</i></div></div></div>';
+  }
+  return h;
+}
+
+function viewHacNd(){
+  var t = HAC_TABS[1];
+  var h = hacHead(t);
+  ND_ZONES.forEach(function(z){
+    var due = z.surf.filter(function(r){ return ndDue(z.k, r[0], r[2]); }).length;
+    h += '<div class="sec-h" style="margin-top:16px"><h2 style="font-size:12px">' + esc(z.fr) + '</h2>'
+      + '<span class="sub">' + esc(z.en) + ' &middot; ' + due + ' à faire</span></div>'
+      + '<div class="card">' + z.surf.map(function(r){
+          var last = ndLast(z.k, r[0]);
+          var doneToday = !!(last && last.d === DAY);
+          var f = FREQ[r[2]];
+          return '<div class="ndrow' + (doneToday ? ' done' : '') + '">'
+            + '<button class="tick" data-act="hacNd" data-z="' + z.k + '" data-i="' + esc(r[0]) + '" '
+            + 'aria-pressed="' + doneToday + '" aria-label="' + esc(r[0]) + '">' + icoCheck() + '</button>'
+            + '<span class="ndmain"><span class="ndname">' + esc(r[0]) + ' <i>' + esc(r[1]) + '</i></span>'
+            + '<span class="ndmeta"><span class="chip">' + esc(f.fr) + '</span>'
+            + (last ? '<span class="chip ok">' + esc(frDate(last.d)) + ' &middot; ' + esc(nameOf(last.by)) + '</span>'
+                    : '<span class="chip wa">jamais / never</span>')
+            + (ndDue(z.k, r[0], r[2]) && !doneToday ? '<span class="chip cr">à faire</span>' : '')
+            + '</span></span></div>';
+        }).join("") + '</div>';
+  });
+  return h;
+}
+
+function hacLog(which, cols, rows, form){
+  var t = HAC_TABS.filter(function(x){ return x.k === which; })[0];
+  var h = hacHead(t) + '<div class="card">' + form;
+  if(!rows.length){
+    h += '<div class="empty">Rien d’enregistré. / Nothing recorded yet.</div></div>';
+    return h;
+  }
+  h += '<div class="logwrap"><table class="logtbl"><thead><tr>'
+    + cols.map(function(c){ return '<th><b>' + esc(c[0]) + '</b><i>' + esc(c[1]) + '</i></th>'; }).join("")
+    + '<th></th></tr></thead><tbody>'
+    + rows.map(function(r){
+        return '<tr>' + cols.map(function(c){
+            return '<td>' + esc(c[2](r) == null ? "" : c[2](r)) + '</td>';
+          }).join("")
+          + '<td><button class="x" data-act="hacRm" data-w="' + which + '" data-id="' + r.id + '" '
+          + 'aria-label="Retirer">&times;</button></td></tr>';
+      }).join("")
+    + '</tbody></table></div></div>';
+  return h;
+}
+
+function supSelect(id){
+  return '<select id="' + id + '">' + SUPPLIERS.map(function(x){
+    return '<option>' + esc(x) + '</option>';
+  }).join("") + '</select>';
+}
+
+function viewHacCool(){
+  var form = '<div class="add">'
+    + '<input id="hc-p" class="w" placeholder="Produit / Product">'
+    + '<input id="hc-it" placeholder="Entrée h" style="flex:0 0 88px">'
+    + '<input id="hc-ic" placeholder="T° &gt;63" style="flex:0 0 88px" inputmode="decimal">'
+    + '<input id="hc-ot" placeholder="Sortie h" style="flex:0 0 88px">'
+    + '<input id="hc-oc" placeholder="T° &lt;10" style="flex:0 0 88px" inputmode="decimal">'
+    + '<input id="hc-n" placeholder="Observations">'
+    + '<button class="btn pri" data-act="hacAdd" data-w="cool">Ajouter</button></div>';
+  return hacLog("cool", [
+    ["Date","Date", function(r){ return r.d; }],
+    ["Produit","Product", function(r){ return r.product; }],
+    ["Entrée","In", function(r){ return (r.inT||"") + (r.inC ? "  " + r.inC + "°C" : ""); }],
+    ["Sortie","Out", function(r){ return (r.outT||"") + (r.outC ? "  " + r.outC + "°C" : ""); }],
+    ["Observations","Notes", function(r){ return r.note; }],
+    ["Responsable","By", function(r){ return nameOf(r.by); }]
+  ], S.hac.cool, form);
+}
+
+function viewHacRecep(){
+  var form = '<div class="add">'
+    + '<input id="hr-p" class="w" placeholder="Produit / Product">'
+    + supSelect("hr-s")
+    + '<input id="hr-t" placeholder="T°C" style="flex:0 0 76px" inputmode="decimal">'
+    + '<input id="hr-d" placeholder="DLC" style="flex:0 0 110px">'
+    + '<input id="hr-l" placeholder="N° lot" style="flex:0 0 110px">'
+    + '<input id="hr-q" placeholder="Visuel / Emb." style="flex:0 0 130px">'
+    + '<input id="hr-n" placeholder="Observations">'
+    + '<button class="btn pri" data-act="hacAdd" data-w="recep">Ajouter</button></div>';
+  return hacLog("recep", [
+    ["Date","Date", function(r){ return r.d; }],
+    ["Produit","Product", function(r){ return r.product; }],
+    ["Fournisseur","Supplier", function(r){ return r.supplier; }],
+    ["T°C","Temp", function(r){ return r.temp; }],
+    ["DLC","Use by", function(r){ return r.dlc; }],
+    ["N° lot","Lot", function(r){ return r.lot; }],
+    ["Visuel/Emb.","Condition", function(r){ return r.visual; }],
+    ["Responsable","By", function(r){ return nameOf(r.by); }]
+  ], S.hac.recep, form);
+}
+
+function viewHacDefr(){
+  var form = '<div class="add">'
+    + '<input id="hd-p" class="w" placeholder="Nature du produit / Product">'
+    + supSelect("hd-s")
+    + '<input id="hd-l" placeholder="N° lot" style="flex:0 0 110px">'
+    + '<input id="hd-di" placeholder="DLC initiale" style="flex:0 0 130px">'
+    + '<input id="hd-dest" placeholder="Destination" style="flex:0 0 140px">'
+    + '<input id="hd-n" placeholder="Observations">'
+    + '<button class="btn pri" data-act="hacAdd" data-w="defr">Ajouter</button></div>';
+  return hacLog("defr", [
+    ["Décongélation","Defrosted", function(r){ return r.d + " " + hhmm(r.at); }],
+    ["Produit","Product", function(r){ return r.product; }],
+    ["Fournisseur","Supplier", function(r){ return r.supplier; }],
+    ["N° lot","Lot", function(r){ return r.lot; }],
+    ["DLC initiale","Original use by", function(r){ return r.dlcInit; }],
+    ["DLC J+2","Use by J+2", function(r){ return r.dlcJ2; }],
+    ["Destination","Destination", function(r){ return r.dest; }],
+    ["Par qui","By", function(r){ return nameOf(r.by); }]
+  ], S.hac.defr, form);
+}
+
+function viewHacNc(){
+  var form = '<div class="add">'
+    + supSelect("hn-s")
+    + '<input id="hn-i" placeholder="N° facture / Invoice" style="flex:0 0 150px">'
+    + '<input id="hn-o" class="w" placeholder="Objet du litige — traçabilité, poids, conditionnement, délai…">'
+    + '<select id="hn-a">'
+    + '<option>Retour fournisseur</option><option>Avoir réclamé</option>'
+    + '<option>Destruction</option><option>Accepté sous réserve</option></select>'
+    + '<input id="hn-n" placeholder="Observations">'
+    + '<button class="btn pri" data-act="hacAdd" data-w="nc">Ajouter</button></div>';
+  return hacLog("nc", [
+    ["Date","Date", function(r){ return r.d; }],
+    ["Fournisseur","Supplier", function(r){ return r.supplier; }],
+    ["N° facture","Invoice", function(r){ return r.invoice; }],
+    ["Objet du litige","Dispute", function(r){ return r.objet; }],
+    ["Action corrective","Action", function(r){ return r.action; }],
+    ["Observations","Notes", function(r){ return r.note; }],
+    ["Responsable","By", function(r){ return nameOf(r.by); }]
+  ], S.hac.nc, form);
+}
+
+function viewHaccp(){
+  hacInit();
+  var h = '<div class="sec">' + hacNav();
+  h += hacTab === "temps" ? viewHacTemps()
+     : hacTab === "nd"    ? viewHacNd()
+     : hacTab === "cool"  ? viewHacCool()
+     : hacTab === "recep" ? viewHacRecep()
+     : hacTab === "defr"  ? viewHacDefr()
+     : viewHacNc();
+  return h + '</div>';
+}
 
 function snapWhen(ts){
   if(!ts) return "—";
@@ -1687,21 +2649,34 @@ function viewDirection(){
 
 function chrome(){
   var counts = {
-    prep: S.prep.filter(function(x){return !x.done}).length,
+    prep: S.prep.filter(function(x){return x.todo && !x.done && !x.arch}).length,
     orders: S.orders.filter(function(x){return !x.done}).length,
     clean: S.clean.filter(function(x){return !x.done}).length,
-    haccp: S.haccp.filter(function(x){return !x.done}).length,
+    haccp: (function(){
+      if(!S.hac) return 0;
+      var day = (S.hac.temps && S.hac.temps[DAY]) || {}, n = 0;
+      (S.hac.enc || []).forEach(function(e){
+        var c = day[e.id] || {};
+        if(!c.am || !c.pm) n++;
+      });
+      ND_ZONES.forEach(function(z){
+        z.surf.forEach(function(r){
+          var last = ndLast(z.k, r[0]);
+          if(!(last && last.d === DAY) && ndDue(z.k, r[0], r[2])) n++;
+        });
+      });
+      return n;
+    })(),
     recipes: 0,
-    pertes: S.waste.length,
     invoices: isMgmt(me) ? S.invoices.filter(function(v){return v.status!=="done"}).length : 0,
-    transferts: S.transfers.length,
     direction: isMgmt(me) ? S.orders.filter(function(o){return !o.done && !o.approved}).length : 0,
     orders: canOrder(me) ? S.orders.filter(function(o){return !o.done}).length : 0,
     service: 0
   };
   var h = '<header class="top"><div class="top-in">'
-    + '<span class="brand">CHEF <em>VIP</em></span>'
-    + '<span class="datechip">Shabour<b>'+esc(prettyDate(DAY))+'</b></span>'
+    + '<span class="brand">' + dia("dia bd") + '<span class="bw">SHABOUR</span>'
+    + '<em>Chef VIP</em></span>'
+    + '<span class="datechip">Cuisine<b>'+esc(prettyDate(DAY))+'</b></span>'
     + (me
         ? '<button class="me" data-act="whoami"><span class="av">'+esc(me.ini)+'</span><span>'+esc(me.name.split(" ")[0])+'</span></button>'
         : '<button class="btn pri" data-act="whoami">Sign in</button>')
@@ -1717,21 +2692,31 @@ function chrome(){
         + (counts[t] ? '<span class="n">'+counts[t]+'</span>' : '') + '</button>';
     }).join("") + '</div></nav>';
 
-  var primary = primaryFor(me).filter(function(t){ return visible.indexOf(t) >= 0; });
-  var rest    = visible.filter(function(t){ return primary.indexOf(t) < 0; });
-  var restN   = rest.reduce(function(a,t){ return a + (counts[t]||0); }, 0);
-  h += '<nav class="botnav">' + primary.map(function(t){
+  /* If everything a person is allowed to open fits along the bottom, put it
+     all there and drop the menu. A cook then has six buttons and nothing
+     hidden behind anything — which is the whole point of cutting the tabs. */
+  var primary, rest;
+  if(visible.length <= 6){
+    primary = visible.slice(); rest = [];
+  } else {
+    primary = primaryFor(me).filter(function(t){ return visible.indexOf(t) >= 0; });
+    rest    = visible.filter(function(t){ return primary.indexOf(t) < 0; });
+  }
+  var restN = rest.reduce(function(a,t){ return a + (counts[t]||0); }, 0);
+  h += '<nav class="botnav' + (visible.length >= 6 ? ' six' : '') + '">' + primary.map(function(t){
       return '<button class="tab" role="tab" aria-selected="'+(t===tab)+'" data-act="tab" data-tab="'+t+'">'
         + ico(t) + '<span>' + esc(TAB_LABEL[t]) + '</span>'
         + (counts[t] ? '<span class="n">'+counts[t]+'</span>' : '') + '</button>';
     }).join("")
-    + '<button class="tab" aria-selected="'+(rest.indexOf(tab)>=0)+'" data-act="more">'
-    + ico("more") + '<span>More</span>'
-    + (restN ? '<span class="n">'+restN+'</span>' : '') + '</button></nav>';
+    + (rest.length
+        ? '<button class="tab" aria-selected="'+(rest.indexOf(tab)>=0)+'" data-act="more">'
+          + ico("more") + '<span>More</span>'
+          + (restN ? '<span class="n">'+restN+'</span>' : '') + '</button>'
+        : '')
+    + '</nav>';
 
   var body = tab==="service"?viewService():tab==="prep"?viewPrep():tab==="orders"?viewOrders()
     : tab==="recipes"?viewRecipes():tab==="clean"?viewClean()
-    : tab==="pertes"?viewWaste():tab==="transferts"?viewTransfers()
     : tab==="invoices"?viewInvoices()
     : tab==="direction"?viewDirection():viewHaccp();
 
@@ -1809,7 +2794,7 @@ document.addEventListener("click", function(e){
   if(act==="useName")    return A.useName(b.getAttribute("data-id"), b.getAttribute("data-p"));
   if(act==="pick")   return A.pick(b.getAttribute("data-id"));
   if(act==="whoami") return A.forget();
-  if(act==="addPrep")  return A.addPrep();
+  if(act==="addPrep")  return A.addPrep(b.getAttribute("data-where"));
   if(act==="addOrder") return A.addOrder();
   if(act==="addPin")   return A.addPin();
   if(act==="newDay")   return A.newDay();
@@ -1818,6 +2803,9 @@ document.addEventListener("click", function(e){
   if(act==="arch")     return A.arch(b.getAttribute("data-id"));
   if(act==="showOld")  return A.showOld();
   if(act==="recView")  return A.recView(b.getAttribute("data-v"));
+  if(act==="ordGroup") return A.ordGroup(b.getAttribute("data-v"));
+  if(act==="srec")     return A.srec(b.getAttribute("data-id"));
+  if(act==="srecUse")  return A.srecUse(b.getAttribute("data-id"), b.getAttribute("data-i"));
   if(act==="recArch")  return A.recArch(b.getAttribute("data-name"));
   if(act==="share")    return A.share(b.getAttribute("data-kind"), b.getAttribute("data-key"));
   if(act==="copyShare")return A.copyShare();
@@ -1827,12 +2815,23 @@ document.addEventListener("click", function(e){
   if(act==="setPin")   return A.setPin(b.getAttribute("data-id"));
   if(act==="clearAcc") return A.clearAcc(b.getAttribute("data-id"));
   if(act==="grantOrder") return A.grantOrder(b.getAttribute("data-id"));
+  if(act==="grantInvoice") return A.grantInvoice(b.getAttribute("data-id"));
+  if(act==="hacTab")    return A.hacTab(b.getAttribute("data-k"));
+  if(act==="hacNd")     return A.hacNd(b.getAttribute("data-z"), b.getAttribute("data-i"));
+  if(act==="hacAdd")    return A.hacAdd(b.getAttribute("data-w"));
+  if(act==="hacRm")     return A.hacRm(b.getAttribute("data-w"), b.getAttribute("data-id"));
+  if(act==="printHac")  return A.printHac();
+  if(act==="ordPut")    return A.ordPut(b.getAttribute("data-id"));
+  if(act==="ordArch")   return A.ordArch(b.getAttribute("data-id"));
+  if(act==="loadOrdCat")return A.loadOrdCat();
+  if(act==="showOldOrd")return A.showOldOrd();
+  if(act==="todo")      return A.todo(b.getAttribute("data-id"));
+  if(act==="todoClear") return A.todoClear();
+  if(act==="printPrep") return A.printPrep();
   if(act==="loadPrep") return A.loadPrep();
   if(act==="adv")      return A.adv(b.getAttribute("data-id"));
   if(act==="addProt")  return A.addProt();
   if(act==="addNote")  return A.addNote();
-  if(act==="addWaste") return A.addWaste();
-  if(act==="addTransfer") return A.addTransfer();
   if(act==="removeProt"){ S.proteins = S.proteins.filter(function(x){return x.id!==b.getAttribute("data-id")}); return save(); }
   if(act==="setCode")  return A.setCode();
   if(act==="unlock")   return A.unlock();
@@ -1844,7 +2843,7 @@ document.addEventListener("click", function(e){
 document.addEventListener("keydown", function(e){
   if(e.key!=="Enter") return;
   var t = e.target;
-  if(t && t.dataset && t.dataset.enter){ e.preventDefault(); A[t.dataset.enter](); }
+  if(t && t.dataset && t.dataset.enter){ e.preventDefault(); A[t.dataset.enter](t.dataset.where); }
 });
 
 document.addEventListener("input", function(e){
@@ -1854,6 +2853,8 @@ document.addEventListener("input", function(e){
 
 document.addEventListener("change", function(e){
   var t = e.target;
+  if(t && t.dataset && t.dataset.osup){ A.ordSup(t.dataset.osup, t.value); save(); }
+  if(t && t.dataset && t.dataset.temp){ A.hacTemp(t.dataset.temp, t.dataset.slot, t.value); save(); }
   if(t && t.dataset && t.dataset.val){ A.setVal(t.dataset.val, t.value); save(); }
   if(t && t.dataset && t.dataset.restr){ A.setRestr(t.dataset.restr, t.value); save(); }
   if(t && t.dataset && t.dataset.prot){ A.setProt(t.dataset.prot, t.value); save(); }
@@ -1868,7 +2869,7 @@ function boot(){
   api("GET", "/api/state").then(function(r){
     if(r.status === 401){ me = null; render(); return; }
     var j = r.json; if(!j) return;
-    S = j.state; me = j.user; readOnly = !!j.readOnly;
+    S = fill(j.state); me = j.user; readOnly = !!j.readOnly;
     if(j.brigade && j.brigade.length){ BRIGADE.length = 0; j.brigade.forEach(function(p){ BRIGADE.push(p); }); }
     mcp = true; mcpTried = true;
     render();

@@ -64,14 +64,30 @@ var APPSRC  = document.getElementById("app").textContent;
 
 var S;
 try { S = JSON.parse(stateEl.textContent); } catch(e){ S = {}; }`,
-`var S = (window.__BOOT__ && window.__BOOT__.state) || {};
-/* The sign-in screen renders before any board has arrived, so S must be
- * safe to read from the very first paint. */
-S.accounts = S.accounts || {};
-S.prep = S.prep || []; S.orders = S.orders || []; S.clean = S.clean || []; S.haccp = S.haccp || [];
-S.waste = S.waste || []; S.transfers = S.transfers || []; S.proteins = S.proteins || [];
-S.notes = S.notes || []; S.invoices = S.invoices || []; S.prices = S.prices || {};
-S.recArch = S.recArch || {}; if(S.priceJump == null) S.priceJump = 10;
+`/* Every board that arrives goes through here: the first paint, the one that
+ * comes back with the sign-in, a poll, and a save that lost the race.
+ *
+ * A board written by an older version of the app is missing whatever was
+ * added since, and the first thing render() does is count S.invoices.
+ * Defaulting only the first copy was not enough — signing in replaced it
+ * with the server's, so the screen went blank at the moment the code was
+ * RIGHT, which reads exactly like a broken sign-in button. */
+function fill(st){
+  st = st || {};
+  st.accounts = st.accounts || {};
+  st.prep = st.prep || []; st.orders = st.orders || []; st.clean = st.clean || [];
+  st.haccp = st.haccp || []; st.waste = st.waste || []; st.transfers = st.transfers || [];
+  st.proteins = st.proteins || []; st.notes = st.notes || []; st.invoices = st.invoices || [];
+  st.pinned = st.pinned || []; st.log = st.log || [];
+  st.hac = st.hac || {};
+  st.ordCat = st.ordCat || [];
+  st.prices = st.prices || {}; st.recArch = st.recArch || {};
+  if(st.priceJump == null) st.priceJump = 10;
+  if(st.rev == null) st.rev = 1;
+  return st;
+}
+
+var S = fill((window.__BOOT__ && window.__BOOT__.state) || {});
 
 var RECIPES    = window.__BOOT__.recipes;
 var ORDER_CATS = window.__BOOT__.orderCats;
@@ -123,7 +139,7 @@ function save(msg){
 function flush(){
   api("PUT", "/api/state", {rev: S.rev, state: S}).then(function(r){
     dirty = false;
-    if(r.status === 409){ S = r.json.state; render(); toast("Someone else saved first - reloaded"); return; }
+    if(r.status === 409){ S = fill(r.json.state); render(); toast("Someone else saved first - reloaded"); return; }
     if(r.status === 401){ me = null; render(); return; }
     if(r.status === 403){ toast("Session expired - reload the page"); render(); return; }
     if(!r.ok){ toast((r.json && r.json.error) || "Could not save, try again"); render(); return; }
@@ -133,7 +149,7 @@ function flush(){
 function poll(){
   if(dirty || !me) return;
   api("GET", "/api/state").then(function(r){
-    if(r.ok && r.json && r.json.state && r.json.state.rev !== S.rev){ S = r.json.state; render(); }
+    if(r.ok && r.json && r.json.state && r.json.state.rev !== S.rev){ S = fill(r.json.state); render(); }
   })["catch"](function(){});
 }
 `;
@@ -176,6 +192,16 @@ fe = swap(fe, /A\.grantOrder = function\(id\)\{[\s\S]*?\n\};\n/,
 };
 `, 'grant orders');
 
+fe = swap(fe, /A\.grantInvoice = function\(id\)\{[\s\S]*?\n\};\n/,
+`A.grantInvoice = function(id){
+  api("POST", "/api/users/" + id + "/invoice").then(function(r){
+    if(!r.ok){ toast((r.json && r.json.error) || "Could not save"); return; }
+    toast(r.json.invoice ? nameOf(id) + " can photograph invoices now"
+                         : nameOf(id) + " can no longer photograph invoices"); boot();
+  })["catch"](function(){ toast("Could not save"); });
+};
+`, 'grant invoices');
+
 fe = swap(fe, /A\.clearAcc = function\(id\)\{[\s\S]*?\n\};\n/,
 `A.clearAcc = function(id){
   api("DELETE", "/api/users/" + id + "/access").then(function(r){
@@ -213,7 +239,7 @@ function boot(){
   api("GET", "/api/state").then(function(r){
     if(r.status === 401){ me = null; render(); return; }
     var j = r.json; if(!j) return;
-    S = j.state; me = j.user; readOnly = !!j.readOnly;
+    S = fill(j.state); me = j.user; readOnly = !!j.readOnly;
     if(j.brigade && j.brigade.length){ BRIGADE.length = 0; j.brigade.forEach(function(p){ BRIGADE.push(p); }); }
     mcp = true; mcpTried = true;
     render();

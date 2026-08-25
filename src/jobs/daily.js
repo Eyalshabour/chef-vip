@@ -68,13 +68,19 @@ async function evening() {
 
   const left = (s.prep || []).filter(p => !p.arch && !p.done).length;
   const cleanLeft = (s.clean || []).filter(c => !c.done).length;
-  const haccpLeft = (s.haccp || []).filter(h => !h.done).length;
+  /* HACCP is six registers now, not a checklist. The one thing a nightly
+     note can say honestly is which enceintes have no reading for today. */
+  const day = ((s.hac && s.hac.temps) || {})[today()] || {};
+  const haccpLeft = ((s.hac && s.hac.enc) || []).filter(e => {
+    const c = day[e.id] || {};
+    return !c.am || !c.pm;
+  }).length;
 
   if (left || cleanLeft || haccpLeft) {
     const bits = [];
     if (left) bits.push(left + ' prep');
     if (cleanLeft) bits.push(cleanLeft + ' cleaning');
-    if (haccpLeft) bits.push(haccpLeft + ' HACCP');
+    if (haccpLeft) bits.push(haccpLeft + ' fridge readings');
     s.notes = s.notes || [];
     s.notes.push({
       id: 'j' + Date.now().toString(36),

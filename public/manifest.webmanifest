@@ -1,13 +1,13 @@
 {
-  "name": "Chef VIP",
-  "short_name": "Chef VIP",
+  "name": "Shabour — Chef VIP",
+  "short_name": "Shabour",
   "description": "The kitchen board for Shabour.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0A0E0C",
-  "theme_color": "#141917",
+  "background_color": "#0B0C0D",
+  "theme_color": "#131517",
   "icons": [
     { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
   ]

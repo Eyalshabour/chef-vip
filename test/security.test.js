@@ -4,7 +4,8 @@ const a = require('node:assert/strict');
 const h = require('./helpers');
 const sec = require('../src/security');
 
-before(h.start);
+let BASE = null;
+before(async () => { BASE = await h.start(); });
 after(h.stop);
 beforeEach(h.reset);
 
@@ -128,4 +129,32 @@ test('an unknown api route answers json, not the app shell', async () => {
   const r = await c.get('/api/does-not-exist');
   a.equal(r.status, 404);
   a.equal(r.json.error, 'No such route.');
+});
+
+test('the shell is not cached and names every asset with a version', async () => {
+  const r = await fetch(BASE + '/');
+  a.equal(r.status, 200);
+  a.match(r.headers.get('cache-control') || '', /no-store/);
+  const html = await r.text();
+  const named = [...html.matchAll(/(?:src|href)="(\/[\w.-]+)\?v=([a-f0-9]{10})"/g)].map(m => m[1]);
+  for (const f of ['/app.js', '/data.js', '/styles.css']) a.ok(named.includes(f), f + ' has no version');
+});
+
+test('a versioned asset is kept forever, an unversioned one is revalidated', async () => {
+  const html = await fetch(BASE + '/').then(x => x.text());
+  const m = /src="\/app\.js\?v=([a-f0-9]{10})"/.exec(html);
+  a.ok(m);
+  a.match((await fetch(BASE + '/app.js?v=' + m[1])).headers.get('cache-control') || '', /immutable/);
+  a.match((await fetch(BASE + '/app.js')).headers.get('cache-control') || '', /no-cache/);
+});
+
+test('the version is the file, so a changed asset always gets a new URL', async () => {
+  const fsx = require('fs'), px = require('path'), cx = require('crypto');
+  const html = await fetch(BASE + '/').then(x => x.text());
+  const served = /src="\/app\.js\?v=([a-f0-9]{10})"/.exec(html)[1];
+  const onDisk = cx.createHash('sha1')
+    .update(fsx.readFileSync(px.join(__dirname, '..', 'public', 'app.js')))
+    .digest('hex').slice(0, 10);
+  a.equal(served, onDisk,
+    'the version is a hash of the file itself — not a build number someone has to remember to bump');
 });

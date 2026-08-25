@@ -9,7 +9,7 @@ const CSP = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com",
+  "font-src 'self' data: https://fonts.gstatic.com",   // the house face is embedded, not fetched
   "img-src 'self' data:",
   "connect-src 'self'",
   "form-action 'self'",

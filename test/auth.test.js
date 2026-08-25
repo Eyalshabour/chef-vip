@@ -131,3 +131,33 @@ test('a first code has to be four digits', async () => {
     a.equal(r.ok, false, JSON.stringify(bad) + ' is refused');
   }
 });
+
+test('BOOTSTRAP_FORCE is the way back in when the code is lost', async () => {
+  await h.pool.query("UPDATE users SET email = 'eyal@restaurantshabour.com' WHERE id = 'ee'");
+  await auth.bootstrap(h.pool, 'ee', '4417');
+
+  /* without the lever, a code already in place is left alone */
+  const refused = await auth.bootstrap(h.pool, 'ee', '8888');
+  a.equal(refused.ok, false);
+  a.ok((await auth.verify('eyal@restaurantshabour.com', '4417')).user, 'the old code still works');
+
+  /* with it, the code is replaced */
+  const forced = await auth.bootstrap(h.pool, 'ee', '8888', { force: true });
+  a.equal(forced.ok, true);
+  a.equal(forced.replaced, true, 'it says it replaced one, so the seed can say so too');
+  a.ok((await auth.verify('eyal@restaurantshabour.com', '8888')).user, 'the new code works');
+  a.ok((await auth.verify('eyal@restaurantshabour.com', '4417')).error, 'the old one does not');
+});
+
+test('BOOTSTRAP_FORCE also clears a lockout', async () => {
+  await h.pool.query("UPDATE users SET email = 'eyal@restaurantshabour.com' WHERE id = 'ee'");
+  await auth.bootstrap(h.pool, 'ee', '4417');
+
+  for (let i = 0; i < MAX_FAILS; i++) await auth.verify('eyal@restaurantshabour.com', '0000');
+  a.equal((await auth.verify('eyal@restaurantshabour.com', '4417')).error, 'locked',
+    'the right code is refused while locked — that is the point of the lock');
+
+  await auth.bootstrap(h.pool, 'ee', '5566', { force: true });
+  a.ok((await auth.verify('eyal@restaurantshabour.com', '5566')).user,
+    'and the lever gets you back in without waiting out the fifteen minutes');
+});
