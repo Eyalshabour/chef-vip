@@ -69,4 +69,23 @@ async function requireOrders(req, res, next) {
   res.status(403).json({ error: 'Not your list.' });
 }
 
-module.exports = { hash, verify, publicUser, requireUser, requireMgmt, requireOrders, MAX_FAILS, LOCK_MS };
+/* ---------------------------------------------------------------
+ * The first code has to come from somewhere.
+ *
+ * Every code is set by management from inside the app — but a fresh
+ * database has no management signed in to set one, so nobody could ever
+ * get in. The director's first code therefore comes from the environment,
+ * once, and only while his is still unset: a code already in place is
+ * never overwritten by a redeploy.
+ * ------------------------------------------------------------- */
+async function bootstrap(db, id, code) {
+  if (!/^\d{4}$/.test(String(code || ''))) return { ok: false, why: 'not four digits' };
+  const { rows } = await db.query('SELECT code_hash FROM users WHERE id = $1', [id]);
+  if (!rows.length) return { ok: false, why: 'no such person' };
+  if (rows[0].code_hash) return { ok: false, why: 'already set' };
+  await db.query('UPDATE users SET code_hash = $1, fail_count = 0, locked_until = NULL WHERE id = $2',
+    [await hash(code), id]);
+  return { ok: true };
+}
+
+module.exports = { hash, verify, publicUser, requireUser, requireMgmt, requireOrders, MAX_FAILS, LOCK_MS, bootstrap };

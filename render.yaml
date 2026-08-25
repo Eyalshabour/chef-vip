@@ -15,6 +15,10 @@ services:
         value: production
       - key: RUN_JOBS
         value: "1"
+      # your own four-digit code, so you can sign in the first time.
+      # Set it in the Render dashboard before the first deploy.
+      - key: BOOTSTRAP_CODE
+        sync: false
       - key: MELBA_API_KEY
         sync: false
       - key: MELBA_API_BASE

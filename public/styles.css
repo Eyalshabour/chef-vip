@@ -172,9 +172,11 @@ main{padding:18px 0 72px}
 .brig{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px}
 .person{background:var(--surface);border:1px solid var(--line);border-radius:2px;padding:12px 14px;display:flex;gap:11px;align-items:center}
 .person.off{opacity:.45}
-.person .pi{min-width:0;flex:1}
-.pn{font-size:var(--small);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.ps{font-family:"IBM Plex Mono",monospace;font-size:var(--micro);color:var(--ink3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.person .pi{display:block;min-width:0;flex:1 1 0}
+/* These are spans, and overflow does nothing to an inline box — so the
+   ellipsis never engaged and a long shift ran off the side of a phone. */
+.pn{display:block;font-size:var(--small);font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ps{display:block;font-family:"IBM Plex Mono",monospace;font-size:var(--micro);color:var(--ink3);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .stripe{width:4px;align-self:stretch;border-radius:4px;flex:none}
 
 /* ── banners & stats ────────────────────────────────────── */

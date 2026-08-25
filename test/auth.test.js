@@ -98,3 +98,36 @@ test('codes are stored hashed, never in the clear', async () => {
   a.match(rows[0].code_hash, /^\$2[aby]\$/);
   a.ok(!rows[0].code_hash.includes('4417'));
 });
+
+/* ---------------------------------------------------------------
+ * The first code. Without this a fresh deployment is a locked door:
+ * every code is set by management from inside the app, and a new
+ * database has no management signed in to set one.
+ * ------------------------------------------------------------- */
+const auth = require('../src/auth');
+
+test('the director gets a first code from the environment, once', async () => {
+  const before = await auth.verify('eyal@restaurantshabour.com', '4417');
+  a.ok(before.error, 'nobody can sign in before a code exists');
+
+  await h.pool.query("UPDATE users SET email = 'eyal@restaurantshabour.com' WHERE id = 'ee'");
+  const first = await auth.bootstrap(h.pool, 'ee', '4417');
+  a.equal(first.ok, true, 'the first code is accepted');
+
+  const now = await auth.verify('eyal@restaurantshabour.com', '4417');
+  a.ok(now.user, 'and it signs him in');
+
+  /* a redeploy must not hand the door back to whoever still knows the old value */
+  const again = await auth.bootstrap(h.pool, 'ee', '9999');
+  a.equal(again.ok, false);
+  a.equal(again.why, 'already set');
+  const stale = await auth.verify('eyal@restaurantshabour.com', '9999');
+  a.ok(stale.error, 'the second bootstrap code does not work');
+});
+
+test('a first code has to be four digits', async () => {
+  for (const bad of ['', '12', 'abcd', '12345', '12a4', null, undefined]) {
+    const r = await auth.bootstrap(h.pool, 'ee', bad);
+    a.equal(r.ok, false, JSON.stringify(bad) + ' is refused');
+  }
+});

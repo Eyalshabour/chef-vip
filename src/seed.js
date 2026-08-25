@@ -2,6 +2,7 @@
 const fs = require('fs');
 const path = require('path');
 const { pool } = require('./db');
+const { bootstrap } = require('./auth');
 
 const read = f => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'seed', f), 'utf8'));
 const brigade = require('../seed/brigade.js');
@@ -23,6 +24,17 @@ const MGMT = { ee: 1, vb: 1, ha: 1 };
     `UPDATE users SET email = 'eyal@restaurantshabour.com'
       WHERE id = 'ee' AND email IS NULL`
   );
+
+  const boot = await bootstrap(pool, 'ee', (process.env.BOOTSTRAP_CODE || '').trim());
+  if (boot.ok) {
+    console.log("director's first code set from BOOTSTRAP_CODE — change it in Management once you are in");
+  } else if (boot.why !== 'already set') {
+    console.warn('');
+    console.warn('!!  Nobody can sign in to this deployment yet.');
+    console.warn('!!  The director has no code (' + boot.why + ').');
+    console.warn('!!  Set BOOTSTRAP_CODE to four digits in the environment and deploy again.');
+    console.warn('');
+  }
 
   const { rows } = await pool.query('SELECT rev FROM board WHERE id = 1');
   if (!rows.length) {
